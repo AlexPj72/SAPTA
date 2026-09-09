@@ -2,43 +2,39 @@ name: SAPTA Slow Pipeline (Analysis + Cost Filter)
 
 on:
   schedule:
-      - cron: '0,30 9-17 * * 1-5'
-        workflow_dispatch:
+    - cron: '0,30 9-17 * * 1-5'
+  workflow_dispatch:
 
-        concurrency:
-          group: sapta-slow
-            cancel-in-progress: true
+concurrency:
+  group: sapta-slow
+  cancel-in-progress: true
 
-            jobs:
-              analysis-and-cost-filter:
-                  runs-on: ubuntu-latest
-                      timeout-minutes: 10
-                          steps:
-                                - name: Checkout repository
-                                        uses: actions/checkout@v4
-
-                                              - name: Set up Python 3.10
-                                                      uses: actions/setup-python@v5
-                                                              with:
-                                                                        python-version: '3.10'
-                                                                                  cache: 'pip'
-                                                                                            cache-dependency-path: requirements-slow.txt
-
-                                                                                                  - name: Install dependencies
-                                                                                                          run: |
-                                                                                                                    python -m pip install --upgrade pip
-                                                                                                                              pip install -r requirements-slow.txt
-
-                                                                                                                                    - name: Run Modulo B - Analysis & Signals
-                                                                                                                                            env:
-                                                                                                                                                      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-                                                                                                                                                                SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-                                                                                                                                                                          NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
-                                                                                                                                                                                    HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
-                                                                                                                                                                                            run: python src/modulo_b_analysis.py
-
-                                                                                                                                                                                                  - name: Run Modulo E - Cost Filter
-                                                                                                                                                                                                          env:
-                                                                                                                                                                                                                    SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-                                                                                                                                                                                                                              SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-                                                                                                                                                                                                                                      run: python src/modulo_e_cost_filter.py
+jobs:
+  analysis-and-cost-filter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: requirements-slow.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-slow.txt
+      - name: Run Modulo B - Analysis & Signals
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
+          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
+        run: python src/modulo_b_analysis.py
+      - name: Run Modulo E - Cost Filter
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_e_cost_filter.py

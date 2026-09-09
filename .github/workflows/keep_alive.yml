@@ -2,27 +2,24 @@ name: SAPTA Supabase Keep-Alive
 
 on:
   schedule:
-      - cron: '0 6 */3 * *'
-        workflow_dispatch:
+    - cron: '0 6 */3 * *'
+  workflow_dispatch:
 
-        jobs:
-          ping:
-              runs-on: ubuntu-latest
-                  timeout-minutes: 3
-                      steps:
-                            - name: Checkout repository
-                                    uses: actions/checkout@v4
-
-                                          - name: Set up Python 3.10
-                                                  uses: actions/setup-python@v5
-                                                          with:
-                                                                    python-version: '3.10'
-
-                                                                          - name: Install minimal dependency
-                                                                                  run: pip install supabase==2.5.1
-
-                                                                                        - name: Ping Supabase
-                                                                                                env:
-                                                                                                          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-                                                                                                                    SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-                                                                                                                            run: python src/keep_alive.py
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install minimal dependency
+        run: pip install supabase==2.5.1
+      - name: Ping Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/keep_alive.py
