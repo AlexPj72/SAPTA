@@ -109,70 +109,120 @@ def analyze_sentiment(ticker, articles):
 def calculate_technical_indicators(ticker):
     """Scarica dati storici e calcola indicatori tecnici.
 
-    v3.5 — fix "barra provvisoria": se l'ultima barra giornaliera di yfinance è quella
-    di OGGI e il mercato potrebbe non aver ancora chiuso, quella barra è "in corso" —
-    il suo Close cambia ad ogni chiamata fino alla chiusura reale. Usarla per calcolare
-    RSI/MACD/Bollinger/ATR può generare segnali che si "ribaltano" nel corso della giornata
-    solo perché il prezzo provvisorio si muove, non perché sia cambiato qualcosa di reale.
-    Per i ticker USA, il problema è strutturale con l'orario attuale del workflow "slow"
-    (9-17 UTC): il mercato USA chiude alle 20:00/21:00 UTC, quindi l'ultima barra scaricata
-    durante il ciclo è SEMPRE quella di oggi, mai quella completa del giorno prima nè quella
-    di oggi già chiusa (vedi SAPTA_v3.md §1.6bis per la correzione lato workflow).
-
-    Soluzione: se la barra più recente ha la data di oggi (UTC), gli indicatori vengono
-    calcolati sulla penultima barra (l'ultimo giorno di trading REALMENTE chiuso), e il
-    segnale viene marcato `is_provisional_bar=True`. Il prezzo "corrente" da passare al
-    Modulo E, invece, deve comunque riflettere il mercato adesso: viene letto dalla
-    tabella `prezzi` (scritta ogni 15 min dal Modulo A), non dalla barra giornaliera.
+    Gestisce esplicitamente il MultiIndex restituito da yfinance per il download
+    di un singolo ticker. Calcola gli indicatori sulla barra giornaliera chiusa
+    più recente quando la barra di oggi è ancora provvisoria; il prezzo corrente
+    viene invece letto dalla tabella Supabase 'prezzi'.
     """
     try:
-        df = yf.download(ticker, period="60d", interval="1d", auto_adjust=True, progress=False)
-        if df.empty or len(df) < 31:  # 31 non 30: serve un margine per poter scartare l'ultima barra
+        df = yf.download(
+            ticker,
+            period="60d",
+            interval="1d",
+            auto_adjust=True,
+            progress=False
+        )
+
+        if df is None or df.empty or len(df) < 31:
+            print(f"⚠️ Dati storici insufficienti per {ticker}")
             return None
 
-        df['RSI'] = ta.rsi(df['Close'], length=14)
+        # yfinance può restituire un MultiIndex anche per un singolo ticker.
+        # In quel caso riduciamo il DataFrame alle sole colonne OHLCV del ticker.
+        if isinstance(df.columns, pd.MultiIndex):
+            if ticker in df.columns.get_level_values(0):
+                df = df.xs(ticker, axis=1, level=0)
+            elif ticker in df.columns.get_level_values(1):
+                df = df.xs(ticker, axis=1, level=1)
 
-        # v3.6 — fix: macd()/bbands() restituiscono un DataFrame, non una tupla.
-        # Scrivere `a, b, c = ta.macd(...)` itera il DataFrame ed estrae i NOMI
-        # delle colonne come stringhe, non i valori — un errore silenzioso che
-        # avrebbe fatto crashare il codice al primo `float(...)` a valle.
-        # Si accede quindi esplicitamente per posizione con .iloc[:, N], nell'ordine
-        # documentato: MACD restituisce [linea, istogramma, segnale];
-        # BBANDS restituisce [banda inferiore, banda media, banda superiore].
-        macd_df = ta.macd(df['Close'])
-        df['MACD'] = macd_df.iloc[:, 0]
-        df['MACD_signal'] = macd_df.iloc[:, 2]  # non iloc[:, 1], quello è l'istogramma
+        required = ["Open", "High", "Low", "Close", "Volume"]
+        missing = [col for col in required if col not in df.columns]
+        if missing:
+            print(f"⚠️ Colonne mancanti per {ticker}: {missing}")
+            return None
 
-        bb_df = ta.bbands(df['Close'], length=20)
-        df['BB_lower'] = bb_df.iloc[:, 0]
-        df['BB_middle'] = bb_df.iloc[:, 1]
-        df['BB_upper'] = bb_df.iloc[:, 2]
+        close = pd.to_numeric(df["Close"], errors="coerce")
+        high = pd.to_numeric(df["High"], errors="coerce")
+        low = pd.to_numeric(df["Low"], errors="coerce")
 
-        df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+        # RSI
+        df["RSI"] = ta.rsi(close, length=14)
+
+        # MACD: pandas-ta-classic restituisce un DataFrame.
+        # Prima colonna = MACD, terza = signal; verifichiamo comunque la risposta.
+        macd_df = ta.macd(close)
+        if macd_df is None or macd_df.empty or macd_df.shape[1] < 3:
+            print(f"⚠️ MACD non disponibile per {ticker}")
+            return None
+
+        df["MACD"] = macd_df.iloc[:, 0]
+        df["MACD_signal"] = macd_df.iloc[:, 2]
+
+        # Bollinger Bands: [lower, middle, upper, ...]
+        bb_df = ta.bbands(close, length=20)
+        if bb_df is None or bb_df.empty or bb_df.shape[1] < 3:
+            print(f"⚠️ Bollinger Bands non disponibili per {ticker}")
+            return None
+
+        df["BB_lower"] = bb_df.iloc[:, 0]
+        df["BB_middle"] = bb_df.iloc[:, 1]
+        df["BB_upper"] = bb_df.iloc[:, 2]
+
+        # ATR
+        df["ATR"] = ta.atr(high, low, close, length=14)
+
+        # Servono indicatori completi sulla barra utilizzata.
+        df = df.dropna(
+            subset=[
+                "RSI",
+                "MACD",
+                "MACD_signal",
+                "BB_lower",
+                "BB_middle",
+                "BB_upper",
+                "ATR"
+            ]
+        )
+
+        if len(df) < 2:
+            print(f"⚠️ Indicatori insufficienti per {ticker}")
+            return None
 
         last_bar_date = df.index[-1].date()
         today_utc = datetime.now(timezone.utc).date()
         is_provisional = (last_bar_date == today_utc)
 
-        # Se la barra di oggi è ancora in formazione, uso la penultima (l'ultimo giorno chiuso)
-        # per calcolare gli indicatori — solo il prezzo "corrente" resta quello di oggi.
+        # Se oggi è ancora in formazione, indicatori sulla penultima barra chiusa.
         row_for_indicators = df.iloc[-2] if is_provisional else df.iloc[-1]
 
+        # Prezzo corrente: dato intraday prodotto dal Modulo A.
         current_price = get_latest_intraday_price(ticker)
         if current_price is None:
-            # Fallback: nessun dato ancora in 'prezzi' oggi (es. Modulo A non ancora girato).
-            # Uso il Close della barra più recente, anche se provvisorio.
-            current_price = float(df.iloc[-1]['Close'])
+            current_price = float(close.iloc[-1])
+
+        bb_range = (
+            float(row_for_indicators["BB_upper"])
+            - float(row_for_indicators["BB_lower"])
+        )
+
+        if bb_range == 0:
+            bb_position = 0.5
+        else:
+            bb_position = (
+                float(row_for_indicators["Close"])
+                - float(row_for_indicators["BB_lower"])
+            ) / bb_range
 
         return {
-            'rsi': float(row_for_indicators['RSI']),
-            'macd': float(row_for_indicators['MACD']),
-            'macd_signal': float(row_for_indicators['MACD_signal']),
-            'bb_position': (float(row_for_indicators['Close']) - float(row_for_indicators['BB_lower'])) / (float(row_for_indicators['BB_upper']) - float(row_for_indicators['BB_lower'])),
-            'atr': float(row_for_indicators['ATR']),
-            'close': current_price,
-            'is_provisional_bar': is_provisional
+            "rsi": float(row_for_indicators["RSI"]),
+            "macd": float(row_for_indicators["MACD"]),
+            "macd_signal": float(row_for_indicators["MACD_signal"]),
+            "bb_position": float(bb_position),
+            "atr": float(row_for_indicators["ATR"]),
+            "close": float(current_price),
+            "is_provisional_bar": is_provisional
         }
+
     except Exception as e:
         print(f"❌ Errore indicatori {ticker}: {e}")
         return None
