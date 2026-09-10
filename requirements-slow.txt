@@ -1,8 +1,8 @@
-yfinance==0.2.40
+yfinance>=1.7.0
 pandas==2.2.2
 numpy==1.26.4
 requests==2.32.3
 supabase==2.5.1
-pandas-ta==0.3.14b
+pandas-ta-classic
 scikit-learn==1.5.0
 xgboost==2.0.3

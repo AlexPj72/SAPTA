@@ -1,8 +1,9 @@
+python3 -m py_compile src/modulo_a_ingestion.py src/modulo_b_analysis.py && echo "COMPILA OK"
 name: SAPTA Supabase Keep-Alive
 
 on:
   schedule:
-    - cron: '0 6 */3 * *'
+    - cron: '0 6 */3 * *'  # ogni 3 giorni, tutti i giorni dell'anno (weekend/festivi inclusi)
   workflow_dispatch:
 
 jobs:
@@ -11,13 +12,16 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
       - name: Set up Python 3.10
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.10'
+
       - name: Install minimal dependency
         run: pip install supabase==2.5.1
+
       - name: Ping Supabase
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

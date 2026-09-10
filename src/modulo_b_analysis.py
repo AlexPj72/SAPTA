@@ -126,7 +126,7 @@ def calculate_technical_indicators(ticker):
     tabella `prezzi` (scritta ogni 15 min dal Modulo A), non dalla barra giornaliera.
     """
     try:
-        df = yf.download(ticker, period="60d", interval="1d", progress=False)
+        df = yf.download(ticker, period="60d", interval="1d", auto_adjust=True, progress=False)
         if df.empty or len(df) < 31:  # 31 non 30: serve un margine per poter scartare l'ultima barra
             return None
 

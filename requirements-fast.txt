@@ -1,5 +1,5 @@
-yfinance==0.2.40
+yfinance>=1.7.0
 pandas==2.2.2
 numpy==1.26.4
 requests==2.32.3
-supabase==2.31.0
+supabase==2.5.1
