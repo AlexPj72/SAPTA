@@ -18,10 +18,11 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from config import supabase, FINNHUB_KEY, PRICE_DIVERGENCE_THRESHOLD
-from src.universe import get_universe
+from universe import get_universe
 
 # [MODIFICA v5.1] L'universo non è più config.TICKERS ma quello curato e
-# versionato in src/universe.py.
+# versionato in universe.py (stessa cartella di questo file ed eseguito
+# con lo stesso working directory di config.py).
 TICKERS = get_universe()
 
 # [NUOVO v5.1] Soglia oltre la quale un dato viene marcato 'stale'.
