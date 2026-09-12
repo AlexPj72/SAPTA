@@ -1,75 +1,140 @@
 """
-Modulo E: Cost & Position Sizing Engine
-Filtra segnali in base al costo reale dell'operazione, incluso un controllo
-di concentrazione settoriale (v3.2).
+Modulo E: Cost, Risk & Position Sizing Engine (v5.1.1)
+
+Cambiamenti rispetto a v3.2:
+- Settore letto da ticker_sectors (128 ticker) invece di SECTOR_MAP
+  hardcoded in config.py (6 ticker) - il controllo di concentrazione
+  settoriale ora copre davvero tutto l'universo.
+- Slippage differenziato per fascia di liquidità (Sezione 12), aggiunto
+  al costo prima del calcolo del rendimento netto.
+- Formula di position sizing SOSTITUITA (Sezione 13): non più
+  capitale*2% / (ATR*2), ma capitale*rischio% / (entry - invalidation_price).
+  Richiede invalidation_price da Modulo B - se manca, il segnale viene
+  saltato invece di stimare un valore arbitrario.
 """
+import argparse
 from datetime import datetime, timedelta, timezone
-from config import supabase, SECTOR_MAP, MAX_POSITIONS_PER_SECTOR, SECTOR_EXPOSURE_LOOKBACK_DAYS
+from config import supabase
+
+# [v5.1.1] Sostituisce SECTOR_MAP hardcoded - non più importato da config.py
+MAX_POSITIONS_PER_SECTOR = 2
+SECTOR_EXPOSURE_LOOKBACK_DAYS = 10
+
+# [Sezione 12] Valori di default, non calibrati - vedi v5.1.1 §28 alert 4
+SLIPPAGE_BY_LIQUIDITY = {
+    'LIQ_HIGH': 0.0005,
+    'LIQ_MEDIUM': 0.0015,
+    'LIQ_LOW': 0.0040,
+}
+DEFAULT_SLIPPAGE = 0.0040  # fail-safe: se liquidity_bucket manca, tratta come il caso peggiore
+
+# [Sezione 13] Rischio massimo per singola operazione, % del capitale
+RISK_PER_TRADE_PERCENT = 0.01  # 1%, punto medio del range 0.5-1% indicato in spec
+CAPITAL_EUR = 10000  # da configurare per il capitale reale in Fase 7
 
 
 def get_broker_costs(broker='Alpaca', mercato='USA'):
-    """Recupera costi del broker da Supabase"""
     try:
-        response = supabase.table('costi_operazione').select('*').eq('broker', broker).eq('mercato', mercato).eq('attivo', True).execute()
-        if response.data:
-            return response.data[0]
+        response = (supabase.table('costi_operazione')
+                    .select('*')
+                    .eq('broker', broker).eq('mercato', mercato).eq('attivo', True)
+                    .execute())
+        return response.data[0] if response.data else None
     except Exception as e:
         print(f"❌ Errore recupero costi: {e}")
-    return None
+        return None
 
 
-def calculate_operation_cost(price, quantity, costs):
-    """Calcola costo totale di un'operazione"""
+def get_ticker_sector_and_liquidity(ticker):
+    """[v5.1.1] Legge da ticker_sectors (128 ticker) invece di SECTOR_MAP."""
+    try:
+        response = (supabase.table('ticker_sectors')
+                    .select('sector, liquidity_bucket')
+                    .eq('ticker', ticker)
+                    .execute())
+        if response.data:
+            return response.data[0].get('sector'), response.data[0].get('liquidity_bucket')
+        return None, None
+    except Exception as e:
+        print(f"⚠️ Errore lettura ticker_sectors per {ticker}: {e}")
+        return None, None
+
+
+def calculate_operation_cost(price, quantity, costs, liquidity_bucket):
+    """[Sezione 12] Aggiunge lo slippage per fascia di liquidità al costo base."""
     commission_fixed = costs['commissione_fissa']
     commission_variable = price * quantity * costs['commissione_percentuale']
     spread_cost = price * quantity * costs['spread_medio_percentuale']
     bollo = price * quantity * costs['bollo_percentuale']
 
-    total_cost = commission_fixed + commission_variable + spread_cost + bollo
-    return total_cost
+    slippage_pct = SLIPPAGE_BY_LIQUIDITY.get(liquidity_bucket, DEFAULT_SLIPPAGE)
+    slippage_cost = price * quantity * slippage_pct
+
+    total_cost = commission_fixed + commission_variable + spread_cost + bollo + slippage_cost
+    return total_cost, slippage_pct
 
 
-def calculate_expected_return(price, confidence, atr, costs, quantity):
-    """Calcola rendimento atteso netto"""
-    # Stima rendimento lordo basato su ATR (volatilità) e confidence
-    expected_move = atr * 2  # Movimento atteso = 2x ATR
-    expected_gross_return = (expected_move / price) * confidence
+def calculate_expected_return(price, confidence_multiplier, atr, costs, quantity, liquidity_bucket):
+    """[v5.1.1] confidence_multiplier sostituisce il vecchio uso diretto di
+    confidence_score come moltiplicatore grezzo - ora viene dalla mappatura
+    esplicita di Sezione 11 (alto/medio/basso -> 1.0/0.7/0.4)."""
+    expected_move = atr * 2
+    expected_gross_return = (expected_move / price) * confidence_multiplier
 
-    # Costo totale
-    total_cost = calculate_operation_cost(price, quantity, costs)
+    total_cost, slippage_pct = calculate_operation_cost(price, quantity, costs, liquidity_bucket)
     cost_percent = total_cost / (price * quantity)
 
-    # Rendimento netto
     expected_net_return = expected_gross_return - cost_percent
-
-    # Accantonamento tasse su plusvalenza
-    # (v3.5 fix: era 'tassazione_plusvalenja_percentuale', refuso che causava
-    # KeyError su ogni segnale con rendimento netto positivo, interrompendo
-    # il ciclo di filter_signals() a metà batch)
     tax_reserve = expected_net_return * costs['tassazione_plusvalenza_percentuale'] if expected_net_return > 0 else 0
 
     return {
         'expected_gross_return': expected_gross_return,
         'estimated_cost': cost_percent,
         'expected_net_return': expected_net_return - tax_reserve,
-        'total_cost_eur': total_cost
+        'slippage_applied_percent': slippage_pct,
     }
 
 
-def check_sector_concentration(ticker, sector, lookback_days, max_per_sector):
-    """(v3.2) Verifica quanti segnali BUY dello stesso settore sono già stati approvati
-    nella finestra di lookback. Approssimazione basata su signals_filtered (non sul
-    portafoglio reale, che arriverà con il Modulo G in Fase 7 — vedi SAPTA_v3.md §3).
-    Ritorna (ok: bool, conteggio_attuale: int)."""
-    if not sector:
-        return True, 0  # ticker senza settore mappato: nessun controllo possibile, non blocca
+def calculate_position_size(entry_price, invalidation_price, risk_percent=RISK_PER_TRADE_PERCENT, capital=CAPITAL_EUR):
+    """
+    [Sezione 13 - SOSTITUISCE la vecchia formula capitale*2%/(ATR*2)]
 
-    sector_tickers = [t for t, s in SECTOR_MAP.items() if s == sector]
-    if not sector_tickers:
-        return True, 0
+    size = (capitale * rischio_max_per_trade%) / (prezzo_entrata - prezzo_stop)
+
+    A differenza della vecchia formula (basata solo su ATR), qui la
+    distanza reale dallo stop (invalidation_price di Modulo B, Sezione 14)
+    determina la size: due titoli con lo stesso ATR ma stop tecnici a
+    distanze diverse ricevono size diverse, riflettendo il rischio vero.
+    """
+    if invalidation_price is None:
+        return None  # niente stima arbitraria: se manca il dato, il segnale va saltato
+
+    stop_distance = abs(entry_price - invalidation_price)
+    if stop_distance <= 0:
+        return None
+
+    max_risk_eur = capital * risk_percent
+    return max_risk_eur / stop_distance
+
+
+def check_sector_concentration(ticker, sector, lookback_days, max_per_sector):
+    """[v5.1.1] Logica invariata dalla v3.2, ma ora sector arriva da
+    ticker_sectors (128 ticker) invece che da SECTOR_MAP (6 ticker) -
+    il controllo copre finalmente tutto l'universo."""
+    if not sector:
+        return True, 0  # settore sconosciuto (es. BPSO.MI): fail-open, non blocca
 
     try:
         threshold = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+        # Serve la lista di ticker dello stesso settore: query diretta su ticker_sectors
+        same_sector = (supabase.table('ticker_sectors')
+                       .select('ticker')
+                       .eq('sector', sector)
+                       .execute())
+        sector_tickers = [r['ticker'] for r in (same_sector.data or [])]
+        if not sector_tickers:
+            return True, 0
+
         response = (supabase.table('signals_filtered')
                     .select('ticker')
                     .in_('ticker', sector_tickers)
@@ -81,21 +146,13 @@ def check_sector_concentration(ticker, sector, lookback_days, max_per_sector):
         return count < max_per_sector, count
     except Exception as e:
         print(f"⚠️ Errore controllo concentrazione settore {sector}: {e}")
-        return True, 0  # in caso di errore, non blocchiamo il segnale (fail-open sul solo controllo extra)
+        return True, 0
 
 
 def filter_signals(tickers_filter=None):
-    """Recupera segnali grezzi recenti e li filtra per costo.
-
-    v3.5: `tickers_filter` (opzionale) limita l'elaborazione a una lista di ticker —
-    usato dal run dedicato post-chiusura USA (`--market=USA`) per rielaborare solo
-    i segnali appena rigenerati da Modulo B con la barra ormai finalizzata.
-    """
     try:
-        # Recupera segnali degli ultimi 35 minuti
         threshold = (datetime.now(timezone.utc) - timedelta(minutes=35)).isoformat()
         response = supabase.table('signals_raw').select('*').gte('timestamp', threshold).execute()
-
         if not response.data:
             print("⚠️ Nessun segnale grezzo recente")
             return
@@ -104,7 +161,7 @@ def filter_signals(tickers_filter=None):
         if tickers_filter is not None:
             signals_to_process = [s for s in signals_to_process if s['ticker'] in tickers_filter]
             if not signals_to_process:
-                print(f"⚠️ Nessun segnale grezzo recente per i ticker richiesti ({tickers_filter})")
+                print(f"⚠️ Nessun segnale grezzo recente per i ticker richiesti")
                 return
 
         costs = get_broker_costs()
@@ -114,42 +171,44 @@ def filter_signals(tickers_filter=None):
 
         for signal in signals_to_process:
             ticker = signal['ticker']
-
             price = signal.get('close_price')
             atr = signal.get('atr')
+            confidence_multiplier = signal.get('confidence_multiplier', 0.4)
+            invalidation_price = signal.get('invalidation_price')
+
             if not price or not atr:
                 print(f"⚠️ {ticker}: segnale senza price/ATR, salto")
                 continue
 
-            # Calcola rendimento atteso con quantity fissa (da ottimizzare con position sizing)
-            quantity = 10  # Esempio
-            returns = calculate_expected_return(price, signal['confidence_score'], atr, costs, quantity)
+            sector, liquidity_bucket = get_ticker_sector_and_liquidity(ticker)
 
-            # Filtro: approva solo se rendimento netto > 0.5%
+            # [Sezione 13] Se manca invalidation_price (es. azione HOLD, o
+            # deterioramento già scartato da B), niente size, niente filtro E
+            position_size = calculate_position_size(price, invalidation_price)
+            if position_size is None and signal['action'] != 'HOLD':
+                print(f"⚠️ {ticker}: manca invalidation_price, impossibile dimensionare - salto")
+                continue
+
+            quantity = position_size / price if position_size else 0
+            returns = calculate_expected_return(price, confidence_multiplier, atr, costs, max(quantity, 1), liquidity_bucket)
+
             threshold_net = 0.005
-            filter_passed = returns['expected_net_return'] > threshold_net
-
+            filter_passed = returns['expected_net_return'] > threshold_net and signal['action'] != 'HOLD'
             filtered_action = signal['action'] if filter_passed else 'HOLD'
-            filter_reason = None if filter_passed else f"Rendimento netto {returns['expected_net_return']:.2%} < soglia {threshold_net:.2%}"
+            filter_reason = None if filter_passed else (
+                f"Rendimento netto {returns['expected_net_return']:.2%} < soglia {threshold_net:.2%}"
+                if signal['action'] != 'HOLD' else "Azione originale già HOLD"
+            )
 
-            # (v3.2) Controllo di concentrazione settoriale
             if filter_passed and filtered_action == 'BUY':
-                sector = SECTOR_MAP.get(ticker)
                 sector_ok, sector_count = check_sector_concentration(
                     ticker, sector, SECTOR_EXPOSURE_LOOKBACK_DAYS, MAX_POSITIONS_PER_SECTOR
                 )
                 if not sector_ok:
                     filter_passed = False
                     filtered_action = 'HOLD'
-                    # (v3.5 fix: mancava l'interpolazione di sector_count nell'f-string)
-                    filter_reason = f"Concentrazione settoriale: già {sector_count} posizioni approvate in '{sector}' negli ultimi {SECTOR_EXPOSURE_LOOKBACK_DAYS} giorni (max {MAX_POSITIONS_PER_SECTOR})"
+                    filter_reason = f"Concentrazione settoriale: già {sector_count} posizioni in '{sector}' (max {MAX_POSITIONS_PER_SECTOR})"
 
-            # Position sizing suggerito (max 2% del capitale a rischio)
-            capital = 10000  # Da configurare
-            max_risk_per_trade = capital * 0.02
-            position_size = max_risk_per_trade / (atr * 2) if atr > 0 else 0
-
-            # Scrivi in signals_filtered
             supabase.table('signals_filtered').insert({
                 'timestamp': signal['timestamp'],
                 'ticker': ticker,
@@ -160,7 +219,13 @@ def filter_signals(tickers_filter=None):
                 'expected_net_return': returns['expected_net_return'],
                 'filter_passed': filter_passed,
                 'filter_reason': filter_reason,
-                'position_size_suggested': position_size
+                'position_size_suggested': position_size,
+                'opportunity_type': signal.get('opportunity_type'),
+                'confidence_level': signal.get('confidence_level'),
+                'invalidation_price': invalidation_price,
+                'invalidation_reason': signal.get('invalidation_reason'),
+                'liquidity_bucket': liquidity_bucket,
+                'slippage_applied_percent': returns['slippage_applied_percent'],
             }).execute()
 
             status = "✅ APPROVATO" if filter_passed else f"❌ DECLASSATO ({filter_reason})"
@@ -171,13 +236,15 @@ def filter_signals(tickers_filter=None):
 
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--market', choices=['ALL', 'USA', 'EU'], default='ALL')
     args = parser.parse_args()
 
-    from config import TICKERS_USA, TICKERS_EU
-    tickers_filter = {'ALL': None, 'USA': TICKERS_USA, 'EU': TICKERS_EU}[args.market]
+    tickers_filter = None
+    if args.market != 'ALL':
+        from universe import get_universe_metadata
+        metadata = get_universe_metadata()
+        tickers_filter = [t for t, m in metadata.items() if m['market'] == args.market]
 
     print(f"🚀 Modulo E - Cost Filter ({args.market}): {datetime.now(timezone.utc).isoformat()}")
     filter_signals(tickers_filter=tickers_filter)
