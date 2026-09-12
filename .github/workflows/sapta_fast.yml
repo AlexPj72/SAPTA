@@ -41,11 +41,11 @@ jobs:
           FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
         run: python src/modulo_a_ingestion.py
 
-      - name: Run Modulo H - Anomaly Scanner
+      - name: Run Modulo H - Screening (H1)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python src/modulo_h_anomaly.py
+        run: python src/modulo_h_anomaly.py --stage=h1
 
       - name: Cleanup old intraday data (pruning, una volta al giorno)
         if: github.event.schedule == '0 20 * * *'
