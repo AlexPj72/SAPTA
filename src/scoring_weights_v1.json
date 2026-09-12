@@ -1,0 +1,19 @@
+{
+  "version": "v1",
+  "_nota": "Placeholder non calibrati - vedi SAPTA v5.1.1 Sezione 28 alert 4. Da validare con backtest walk-forward prima del paper trading. Non modificare senza incrementare 'version'.",
+  "context_weights": {
+    "trend_sma200": 0.45,
+    "trend_sma50_vs_200": 0.25,
+    "distance_from_extremes": 0.30
+  },
+  "confidence_multiplier": {
+    "alto": 1.0,
+    "medio": 0.7,
+    "basso": 0.4
+  },
+  "liquidity_slippage_percent": {
+    "LIQ_HIGH": 0.05,
+    "LIQ_MEDIUM": 0.15,
+    "LIQ_LOW": 0.40
+  }
+}
