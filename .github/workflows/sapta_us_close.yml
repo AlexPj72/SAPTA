@@ -38,7 +38,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
-        run: python src/modulo_b_analysis.py --market=USA
+        run: python src/modulo_b_analysis.py --market=USA --force-reprocess
 
       - name: Run Modulo E - Cost Filter (solo USA)
         env:
