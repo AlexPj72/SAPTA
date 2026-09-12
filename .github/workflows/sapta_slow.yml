@@ -37,7 +37,13 @@ jobs:
           NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
         run: python src/modulo_b_analysis.py
-
+        
+      - name: Run Modulo H - Anomaly + Context (H2)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_h_anomaly.py --stage=h2
+        
       - name: Run Modulo E - Cost Filter
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
