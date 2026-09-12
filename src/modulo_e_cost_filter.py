@@ -30,7 +30,35 @@ DEFAULT_SLIPPAGE = 0.0040  # fail-safe: se liquidity_bucket manca, tratta come i
 
 # [Sezione 13] Rischio massimo per singola operazione, % del capitale
 RISK_PER_TRADE_PERCENT = 0.01  # 1%, punto medio del range 0.5-1% indicato in spec
-CAPITAL_EUR = 10000  # da configurare per il capitale reale in Fase 7
+
+# Fallback estremo se capital_state è vuota o irraggiungibile - non è più il
+# valore "vero" del capitale, solo una rete di sicurezza per non bloccare il
+# job. Il capitale reale si legge da capital_state (tabella Supabase),
+# impostabile a runtime dalla dashboard: consente di testare capitali diversi,
+# aumentarlo/diminuirlo nel tempo, e in futuro (Fase 7, Modulo G) aggiornarlo
+# automaticamente in base ai P&L realizzati (change_type='realized_pnl').
+FALLBACK_CAPITAL_EUR = 1000
+
+
+def get_current_capital():
+    """Legge il capitale corrente da capital_state (riga più recente per timestamp).
+    Fail-open: se la tabella è vuota o la query fallisce, usa FALLBACK_CAPITAL_EUR
+    e stampa un avviso esplicito - non blocca il job, ma il valore usato è
+    tracciabile nei log."""
+    try:
+        response = (supabase.table('capital_state')
+                    .select('capital_eur, created_at')
+                    .order('created_at', desc=True)
+                    .limit(1)
+                    .execute())
+        if response.data:
+            capital = float(response.data[0]['capital_eur'])
+            return capital
+        print(f"⚠️ capital_state vuota, uso fallback €{FALLBACK_CAPITAL_EUR}")
+        return FALLBACK_CAPITAL_EUR
+    except Exception as e:
+        print(f"⚠️ Errore lettura capital_state: {e} — uso fallback €{FALLBACK_CAPITAL_EUR}")
+        return FALLBACK_CAPITAL_EUR
 
 
 def get_broker_costs(broker='Alpaca', mercato='USA'):
@@ -95,7 +123,7 @@ def calculate_expected_return(price, confidence_multiplier, atr, costs, quantity
     }
 
 
-def calculate_position_size(entry_price, invalidation_price, risk_percent=RISK_PER_TRADE_PERCENT, capital=CAPITAL_EUR):
+def calculate_position_size(entry_price, invalidation_price, capital, risk_percent=RISK_PER_TRADE_PERCENT):
     """
     [Sezione 13 - SOSTITUISCE la vecchia formula capitale*2%/(ATR*2)]
 
@@ -169,6 +197,12 @@ def filter_signals(tickers_filter=None):
             print("❌ Costi broker non configurati")
             return
 
+        # Letto una sola volta per run (non per singolo segnale): il capitale
+        # non cambia nel corso di un'esecuzione di 2-3 minuti, e così si evita
+        # una query Supabase per ogni ticker.
+        current_capital = get_current_capital()
+        print(f"💰 Capitale corrente: €{current_capital:,.2f}")
+
         for signal in signals_to_process:
             ticker = signal['ticker']
             price = signal.get('close_price')
@@ -184,7 +218,7 @@ def filter_signals(tickers_filter=None):
 
             # [Sezione 13] Se manca invalidation_price (es. azione HOLD, o
             # deterioramento già scartato da B), niente size, niente filtro E
-            position_size = calculate_position_size(price, invalidation_price)
+            position_size = calculate_position_size(price, invalidation_price, current_capital)
             if position_size is None and signal['action'] != 'HOLD':
                 print(f"⚠️ {ticker}: manca invalidation_price, impossibile dimensionare - salto")
                 continue
