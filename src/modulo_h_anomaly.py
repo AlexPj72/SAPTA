@@ -1,89 +1,291 @@
 """
-Modulo H: Momentum & Volume Anomaly Scanner (v3.3 — intraday reale)
-Legge i dati a 15 minuti già raccolti dal Modulo A nella tabella 'prezzi',
-invece di riscaricare dati giornalieri in modo indipendente: solo così
-il ciclo a 15 minuti ha un vantaggio reale di tempestività.
+Modulo H: Anomaly Radar v5.1.1 (H1 + H2)
+
+H1 (workflow "fast", ogni 15 min): screening leggero su tutto l'universo
+(128 ticker), zero chiamate esterne, solo query a 'prezzi' già scritto da A.
+Scarta i ticker con dato sporco, promuove i migliori ~20-30 a
+screening_candidates con status='h1_candidate'.
+
+H2 (workflow "slow", ogni 30 min): rilegge i candidati H1 di oggi, calcola
+anomaly_score pieno (soglie più severe), context_score versionato (Sezione 7)
+e news_light_count (Google News RSS, Sezione 7 livello 1). Promuove i
+migliori ~5-15 a status='promosso_a_B' (letti poi da Modulo B), scarta il
+resto con status='scartato_h2'.
+
+NOTA IMPORTANTE - dashboard PHP: questa riscrittura non scrive più sulla
+tabella legacy 'anomalies' che la dashboard esistente legge. Finché la
+dashboard non viene aggiornata per leggere da 'screening_candidates',
+la sezione "Anomalie" della dashboard resterà vuota. Non è un bug di
+questo script, è una conseguenza del cambio di modello (Sezione 16: non
+più segnale secco, ma opportunità con score) - va pianificato a parte.
 """
-from datetime import datetime, timedelta, timezone
-from config import supabase, TICKERS, VOLUME_ANOMALY_THRESHOLD, PRICE_ANOMALY_THRESHOLD
+import os
+import re
+import json
+import argparse
+from datetime import datetime, timezone
+from urllib.parse import quote
 
-BARS_LOOKBACK = 20          # ~5 ore di storico intraday a 15 min (20 x 15min)
-MIN_BARS_FOR_BASELINE = 8   # almeno ~2 ore di dati raccolti oggi prima di valutare un'anomalia
+import requests
+import yfinance as yf
+from config import supabase
+from universe import get_universe
+
+WEIGHTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scoring_weights_v1.json')
+with open(WEIGHTS_PATH) as f:
+    WEIGHTS = json.load(f)
+
+SCORING_WEIGHTS_VERSION = WEIGHTS['version']
+CONTEXT_WEIGHTS = WEIGHTS['context_weights']
+
+# ---- H1: screening ampio, soglie permissive di proposito ----
+H1_BARS_LOOKBACK = 20
+H1_MIN_BARS_FOR_BASELINE = 8
+H1_VOLUME_ANOMALY_THRESHOLD = 3.0
+H1_PRICE_ANOMALY_THRESHOLD = 0.015
+H1_TOP_N = 30
+
+# ---- H2: soglie piene (stesse della v3.3 originale) ----
+H2_VOLUME_ANOMALY_THRESHOLD = 5.0
+H2_PRICE_ANOMALY_THRESHOLD = 0.03
+H2_TOP_N = 15
+H2_MIN_DAILY_BARS_FOR_TREND = 200  # serve SMA200
+
+NEWS_RSS_TIMEOUT_SECONDS = 4
+NEWS_RSS_URL = "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
 
 
-def get_recent_bars(ticker, limit=BARS_LOOKBACK):
-    """Legge le ultime N barre a 15 minuti dalla tabella 'prezzi' (scritte dal Modulo A)."""
+def get_recent_bars(ticker, limit):
     try:
         response = (supabase.table('prezzi')
-                    .select('timestamp, close, volume')
+                    .select('timestamp, close, volume, data_quality_flag')
                     .eq('ticker', ticker)
+                    .eq('interval', '15m')
                     .order('timestamp', desc=True)
                     .limit(limit)
                     .execute())
-        # Supabase le restituisce dalla più recente: le rimetto in ordine cronologico
         return list(reversed(response.data)) if response.data else []
     except Exception as e:
         print(f"⚠️ Errore lettura prezzi intraday per {ticker}: {e}")
         return []
 
 
-def check_related_news(ticker):
-    """Controlla se ci sono news recenti per il ticker (ultime 24h)."""
+def get_ticker_meta_map():
+    """Una sola query per tutti i 128 ticker, invece di 128 query separate."""
     try:
-        threshold = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-        response = (supabase.table('news')
-                    .select('id')
-                    .contains('related_tickers', [ticker])
-                    .gte('timestamp', threshold)
-                    .execute())
-        return len(response.data) > 0
+        response = supabase.table('ticker_sectors').select('ticker, sector, liquidity_bucket').execute()
+        return {row['ticker']: row for row in (response.data or [])}
     except Exception as e:
-        print(f"⚠️ Errore check news per {ticker}: {e}")
-        return False
+        print(f"⚠️ Errore lettura ticker_sectors: {e}")
+        return {}
 
 
-def scan_anomalies():
-    """Scansiona ticker per anomalie volume/prezzo usando i dati intraday già raccolti oggi."""
-    for ticker in TICKERS:
-        bars = get_recent_bars(ticker)
-        if len(bars) < MIN_BARS_FOR_BASELINE:
-            # Non abbastanza storico intraday raccolto oggi (es. mercato appena aperto,
-            # oppure ticker con dati mancanti) — si salta, non si stima "a occhio"
+def compute_intraday_anomaly(bars, volume_threshold, price_threshold):
+    """Logica invariata dalla v3.3: volume ratio + variazione prezzo su barre intraday."""
+    *baseline_bars, current_bar = bars
+    try:
+        current_volume = float(current_bar['volume'] or 0)
+        current_close = float(current_bar['close'])
+        baseline_volumes = [float(b['volume'] or 0) for b in baseline_bars]
+        avg_volume = sum(baseline_volumes) / len(baseline_volumes) if baseline_volumes else 0
+        if avg_volume == 0:
+            return False, 0.0, 0.0
+
+        volume_ratio = current_volume / avg_volume
+        reference_close = float(baseline_bars[0]['close'])
+        price_change = (current_close - reference_close) / reference_close
+
+        is_anomaly = volume_ratio >= volume_threshold and abs(price_change) >= price_threshold
+        return is_anomaly, volume_ratio, price_change
+    except Exception:
+        return False, 0.0, 0.0
+
+
+# ============================================================
+# H1
+# ============================================================
+
+def run_h1():
+    tickers = get_universe()
+    meta_map = get_ticker_meta_map()
+    candidates = []
+
+    for ticker in tickers:
+        bars = get_recent_bars(ticker, H1_BARS_LOOKBACK)
+        if len(bars) < H1_MIN_BARS_FOR_BASELINE:
             continue
 
-        *baseline_bars, current_bar = bars
+        # [Sezione 7] scarto a monte se l'ultima barra ha qualità dato negativa
+        last_flag = bars[-1].get('data_quality_flag')
+        if last_flag not in (None, 'ok'):
+            continue
+
+        is_anomaly, volume_ratio, price_change = compute_intraday_anomaly(
+            bars, H1_VOLUME_ANOMALY_THRESHOLD, H1_PRICE_ANOMALY_THRESHOLD
+        )
+        if not is_anomaly:
+            continue
+
+        h1_score = volume_ratio * abs(price_change) * 100
+        meta = meta_map.get(ticker, {})
+        candidates.append({
+            'ticker': ticker,
+            'h1_score': round(h1_score, 3),
+            'data_quality_flag': last_flag or 'ok',
+            'liquidity_bucket': meta.get('liquidity_bucket'),
+        })
+
+    candidates.sort(key=lambda c: c['h1_score'], reverse=True)
+    top_candidates = candidates[:H1_TOP_N]
+
+    now = datetime.now(timezone.utc).isoformat()
+    for c in top_candidates:
         try:
-            current_volume = float(current_bar['volume'] or 0)
-            current_close = float(current_bar['close'])
-            baseline_volumes = [float(b['volume'] or 0) for b in baseline_bars]
-            avg_volume = sum(baseline_volumes) / len(baseline_volumes) if baseline_volumes else 0
-            if avg_volume == 0:
-                continue
-
-            volume_ratio = current_volume / avg_volume
-
-            # Variazione prezzo rispetto all'inizio della finestra di riferimento (non al giorno prima)
-            reference_close = float(baseline_bars[0]['close'])
-            price_change = (current_close - reference_close) / reference_close
-
-            if volume_ratio >= VOLUME_ANOMALY_THRESHOLD and abs(price_change) >= PRICE_ANOMALY_THRESHOLD:
-                print(f"🚨 ANOMALIA INTRADAY {ticker}: volume {volume_ratio:.1f}x, prezzo {price_change:.2%}")
-
-                has_news = check_related_news(ticker)
-                confidence = 0.8 if has_news else 0.5
-
-                supabase.table('anomalies').insert({
-                    'timestamp': datetime.now(timezone.utc).isoformat(),
-                    'ticker': ticker,
-                    'volume_ratio': volume_ratio,
-                    'price_change_percent': price_change * 100,
-                    'has_related_news': has_news,
-                    'confidence_score': confidence
-                }).execute()
+            supabase.table('screening_candidates').insert({
+                'ticker': c['ticker'],
+                'timestamp': now,
+                'h1_score': c['h1_score'],
+                'data_quality_flag': c['data_quality_flag'],
+                'liquidity_bucket': c['liquidity_bucket'],
+                'status': 'h1_candidate',
+            }).execute()
         except Exception as e:
-            print(f"❌ Errore scan {ticker}: {e}")
+            print(f"❌ Errore scrittura screening_candidates per {c['ticker']}: {e}")
+
+    print(f"✅ H1: {len(candidates)} candidati grezzi trovati su {len(tickers)} ticker, "
+          f"{len(top_candidates)} promossi a H2")
+
+
+# ============================================================
+# H2
+# ============================================================
+
+def fetch_news_light_count(ticker):
+    """[Sezione 7, livello 1] Conteggio headline via Google News RSS.
+    Fail-open: errore o timeout -> None, il ticker prosegue comunque (Sezione 19bis)."""
+    url = NEWS_RSS_URL.format(query=quote(ticker))
+    try:
+        r = requests.get(url, timeout=NEWS_RSS_TIMEOUT_SECONDS)
+        r.raise_for_status()
+        return len(re.findall(r'<item>', r.text))
+    except Exception as e:
+        print(f"⚠️ RSS non disponibile per {ticker}: {e}")
+        return None
+
+
+def compute_context_score(ticker):
+    """
+    [Sezione 7] Trend (SMA200, SMA50 vs SMA200) + distanza da massimi/minimi.
+    Momentum e sector_relative restano fuori per ora (storico/confronto
+    settoriale non ancora disponibili) - vedi nota in scoring_weights_v1.json.
+
+    Scarica on-demand via yfinance SOLO per i ~20-30 candidati H1 (costo
+    trascurabile, Sezione 19bis) - non l'intero universo. Da sostituire con
+    lettura da 'prezzi' (interval='1d') quando lo storico bulk (STEP 11)
+    sarà caricato, per evitare la chiamata yfinance ripetuta ogni ciclo.
+    """
+    try:
+        df = yf.download(ticker, period="300d", interval="1d", auto_adjust=True, progress=False)
+        if df.empty or len(df) < H2_MIN_DAILY_BARS_FOR_TREND:
+            return None  # storico insufficiente per SMA200, non si inventa un valore
+
+        close = df['Close']
+        sma50 = float(close.rolling(50).mean().iloc[-1])
+        sma200 = float(close.rolling(200).mean().iloc[-1])
+        current = float(close.iloc[-1])
+
+        trend_sma200 = 1.0 if current > sma200 else -1.0
+        trend_sma50_vs_200 = 1.0 if sma50 > sma200 else -1.0
+
+        window = close.tail(252) if len(close) >= 252 else close
+        high_52w, low_52w = float(window.max()), float(window.min())
+        span = high_52w - low_52w
+        distance_norm = ((current - low_52w) / span * 2 - 1) if span > 0 else 0.0  # -1..+1
+
+        w = CONTEXT_WEIGHTS
+        score = (
+            w.get('trend_sma200', 0) * trend_sma200
+            + w.get('trend_sma50_vs_200', 0) * trend_sma50_vs_200
+            + w.get('distance_from_extremes', 0) * distance_norm
+        )
+        return round(score, 4)
+    except Exception as e:
+        print(f"⚠️ Errore calcolo context_score per {ticker}: {e}")
+        return None
+
+
+def run_h2():
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    try:
+        response = (supabase.table('screening_candidates')
+                    .select('id, ticker')
+                    .eq('status', 'h1_candidate')
+                    .gte('timestamp', today_start)
+                    .execute())
+        rows = response.data or []
+    except Exception as e:
+        print(f"❌ Errore lettura screening_candidates: {e}")
+        return
+
+    if not rows:
+        print("⚠️ Nessun candidato H1 da processare oggi")
+        return
+
+    enriched = []
+    for row in rows:
+        ticker = row['ticker']
+        bars = get_recent_bars(ticker, H1_BARS_LOOKBACK)
+        if len(bars) < H1_MIN_BARS_FOR_BASELINE:
+            continue
+
+        _, volume_ratio, price_change = compute_intraday_anomaly(
+            bars, H2_VOLUME_ANOMALY_THRESHOLD, H2_PRICE_ANOMALY_THRESHOLD
+        )
+        anomaly_score = volume_ratio * abs(price_change) * 100
+
+        context_score = compute_context_score(ticker)
+        news_light_count = fetch_news_light_count(ticker)
+
+        # Combinazione preliminare, NON la formula di ranking finale (quella
+        # è compito del Modulo E/ranking, Sezione 16) - qui serve solo per
+        # scegliere chi promuovere a B. Da validare col backtest (Sezione 22).
+        combined_score = anomaly_score + (context_score or 0) * 10
+
+        enriched.append({
+            'id': row['id'],
+            'ticker': ticker,
+            'anomaly_score': round(anomaly_score, 3),
+            'context_score': context_score,
+            'news_light_count': news_light_count,
+            'combined_score': combined_score,
+        })
+
+    enriched.sort(key=lambda c: c['combined_score'], reverse=True)
+    promoted_ids = {c['id'] for c in enriched[:H2_TOP_N]}
+
+    for c in enriched:
+        status = 'promosso_a_B' if c['id'] in promoted_ids else 'scartato_h2'
+        try:
+            supabase.table('screening_candidates').update({
+                'anomaly_score': c['anomaly_score'],
+                'context_score': c['context_score'],
+                'news_light_count': c['news_light_count'],
+                'scoring_weights_version': SCORING_WEIGHTS_VERSION,
+                'status': status,
+            }).eq('id', c['id']).execute()
+        except Exception as e:
+            print(f"❌ Errore aggiornamento screening_candidates per {c['ticker']}: {e}")
+
+    print(f"✅ H2: {len(enriched)} candidati processati, {len(promoted_ids)} promossi a Modulo B")
 
 
 if __name__ == "__main__":
-    print(f"🚀 Modulo H - Anomaly Scanner: {datetime.now(timezone.utc).isoformat()}")
-    scan_anomalies()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--stage', choices=['h1', 'h2'], required=True)
+    args = parser.parse_args()
+
+    print(f"🚀 Modulo H ({args.stage.upper()}): {datetime.now(timezone.utc).isoformat()}")
+    if args.stage == 'h1':
+        run_h1()
+    else:
+        run_h2()
