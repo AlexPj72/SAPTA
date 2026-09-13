@@ -127,10 +127,10 @@ Inoltre, in questa sessione:
 
 | Elemento | Stato | Note |
 |---|---|---|
-| Storico base 2 anni, tutto l'universo | ⬜ | |
-| Storico esteso 5-6 anni, 15-20 ticker per stress test | ⬜ | |
-| Backtest walk-forward | ⬜ | |
-| Stress test marzo 2020 / bear 2022 | ⬜ | |
+| Storico base 2 anni, tutto l'universo | ✅ | **Fatto in questa sessione**: 134/135 ticker, 67.278 righe, copertura 2024-09-11 → oggi. Manca solo `BPSO.MI` (stesso ticker già noto senza sector/industry via yfinance — limitazione nota, non bloccante) |
+| Storico esteso 5-6 anni, 15-20 ticker per stress test | ✅ | **Fatto in questa sessione**: 18 ticker (mix LIQ_HIGH/MEDIUM/LOW, settori diversi, incluso l'unico LIQ_LOW disponibile `AVIO.MI`), storico dal 2019-06-03 — copre sia marzo 2020 sia il bear market 2022. Script: `src/load_historical_data.py`, workflow one-off `load_historical.yml` |
+| Backtest walk-forward | ⬜ | Non iniziato — dipende da Rischio di Portafoglio (punto 6) e Ranking (punto 7), non ancora scritti |
+| Stress test marzo 2020 / bear 2022 | ⬜ | Dati ora disponibili (vedi sopra), ma il backtest stesso non è ancora scritto |
 
 ## 9. Dashboard PHP (Aruba)
 
@@ -162,3 +162,4 @@ Vedi `SAPTA_v5_1_1_Corretto.md` Sezione 28 per il testo completo:
 3. Misurare la durata reale del job "slow" con H2/RSS incluso (alert 3, §28) nelle prime esecuzioni
 4. Decidere il capitale operativo per l'avvio del paper trading (oggi placeholder €1.000 in `capital_state`) — non bloccante per i test H1/H2, ma da fissare prima della Fase 7
 5. Dopo aver confermato H1/H2/B stabili con dati reali: passare al Rischio di Portafoglio (Sezione 15, punto 6 di questo documento), poi al Ranking finale (punto 7)
+6. **Storico daily completato** (punto 8) — una volta pronti Rischio di Portafoglio e Ranking, si può passare al backtest walk-forward (Sezione 22), inclusi gli stress test su marzo 2020/bear 2022
