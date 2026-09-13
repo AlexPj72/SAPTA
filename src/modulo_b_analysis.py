@@ -25,7 +25,7 @@ import requests
 import pandas as pd
 import pandas_ta as ta
 from datetime import datetime, timedelta, timezone
-from config import supabase, NEWSAPI_KEY, HUGGINGFACE_API_KEY, NEWS_CACHE_MINUTES, GROQ_API_KEY
+from config import supabase, NEWSAPI_KEY, HUGGINGFACE_API_KEY, NEWS_CACHE_MINUTES, GEMINI_API_KEY
 from universe import get_universe_metadata
 
 FINBERT_API_URL = "https://api-inference.huggingface.co/models/ProsusAI/finbert"
@@ -287,16 +287,17 @@ def compute_target(action, close_price, atr, risk_reward_ratio=2.0):
     return price, reason
 
 
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 
 def run_ai_agent(ticker, indicators, sentiment, context_score, news_light_count, has_earnings):
     """[Modulo I - SAPTA_v4.md §3] Terzo canale indipendente: riceve gli stessi
     dati grezzi di Modulo B ma NON il verdetto/score di B, e ragiona in autonomia
-    via LLM gratuito (Groq Llama 3.3 70B). Scrive in ai_agent_decisions, tabella
-    parallela a signals_raw - non influenza in alcun modo il filtro di Modulo E.
+    via LLM gratuito (Gemini 2.5 Flash, Google AI Studio - free tier, nessuna
+    carta richiesta). Scrive in ai_agent_decisions, tabella parallela a
+    signals_raw - non influenza in alcun modo il filtro di Modulo E.
     Anticipato dalla Fase 7 (dove nasce nella spec) su richiesta esplicita utente."""
-    if not GROQ_API_KEY:
+    if not GEMINI_API_KEY:
         return  # secret non configurato, salta silenziosamente senza bloccare Modulo B
 
     prompt = f"""Sei un analista tecnico indipendente. Dati grezzi per {ticker}:
@@ -316,32 +317,27 @@ SOLO con un oggetto JSON, nessun altro testo, in questo formato esatto:
 
     try:
         r = requests.post(
-            GROQ_API_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 200,
-            },
+            f"{GEMINI_API_URL}?key={GEMINI_API_KEY}",
+            headers={"Content-Type": "application/json"},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=20
         )
         r.raise_for_status()
-        content = r.json()['choices'][0]['message']['content'].strip()
+        content = r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         content = content.replace('```json', '').replace('```', '').strip()
         parsed = json.loads(content)
 
         supabase.table('ai_agent_decisions').insert({
             'ticker': ticker,
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'model_used': 'groq-llama-3.3-70b',
+            'model_used': 'gemini-2.5-flash',
             'ai_decision': parsed.get('decision', 'HOLD'),
             'ai_confidence': float(parsed.get('confidence', 0.5)),
             'ai_reasoning': parsed.get('reasoning', ''),
         }).execute()
         print(f"   🤖 Modulo I: {parsed.get('decision')} (conf={parsed.get('confidence')})")
     except Exception as e:
-        print(f"⚠️ Modulo I (Groq) errore per {ticker}: {e} — non blocca Modulo B")
+        print(f"⚠️ Modulo I (Gemini) errore per {ticker}: {e} — non blocca Modulo B")
 
 
 def generate_signal(indicators, sentiment, context_score, news_light_count, has_earnings):

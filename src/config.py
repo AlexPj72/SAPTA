@@ -15,7 +15,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 FINNHUB_KEY = os.environ.get('FINNHUB_KEY', '')
 NEWSAPI_KEY = os.environ.get('NEWSAPI_KEY', '')
 HUGGINGFACE_API_KEY = os.environ.get('HUGGINGFACE_API_KEY', '')  # (v3.1) sentiment via Inference API
-GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')  # (Modulo I) ragionamento LLM indipendente, free tier
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')  # (Modulo I) ragionamento LLM indipendente, free tier Google AI Studio
 
 # Ticker da monitorare (personalizza), divisi per mercato (v3.5 — necessario per il run
 # dedicato post-chiusura USA, vedi SAPTA_v3.md §1.6bis)
