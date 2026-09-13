@@ -25,7 +25,7 @@ import requests
 import pandas as pd
 import pandas_ta as ta
 from datetime import datetime, timedelta, timezone
-from config import supabase, NEWSAPI_KEY, HUGGINGFACE_API_KEY, NEWS_CACHE_MINUTES
+from config import supabase, NEWSAPI_KEY, HUGGINGFACE_API_KEY, NEWS_CACHE_MINUTES, GROQ_API_KEY
 from universe import get_universe_metadata
 
 FINBERT_API_URL = "https://api-inference.huggingface.co/models/ProsusAI/finbert"
@@ -287,6 +287,63 @@ def compute_target(action, close_price, atr, risk_reward_ratio=2.0):
     return price, reason
 
 
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+def run_ai_agent(ticker, indicators, sentiment, context_score, news_light_count, has_earnings):
+    """[Modulo I - SAPTA_v4.md §3] Terzo canale indipendente: riceve gli stessi
+    dati grezzi di Modulo B ma NON il verdetto/score di B, e ragiona in autonomia
+    via LLM gratuito (Groq Llama 3.3 70B). Scrive in ai_agent_decisions, tabella
+    parallela a signals_raw - non influenza in alcun modo il filtro di Modulo E.
+    Anticipato dalla Fase 7 (dove nasce nella spec) su richiesta esplicita utente."""
+    if not GROQ_API_KEY:
+        return  # secret non configurato, salta silenziosamente senza bloccare Modulo B
+
+    prompt = f"""Sei un analista tecnico indipendente. Dati grezzi per {ticker}:
+- Prezzo attuale: {indicators['close']:.2f}
+- RSI(14): {indicators['rsi']:.1f}
+- MACD: {indicators['macd']:.4f} (signal: {indicators['macd_signal']:.4f})
+- Posizione nelle Bollinger Bands (0=banda bassa, 1=banda alta): {indicators['bb_position']:.2f}
+- ATR(14): {indicators['atr']:.2f}
+- Sentiment news (-1 negativo, +1 positivo): {sentiment:.2f}
+- Punteggio di contesto (trend/settore, -1/+1): {context_score if context_score is not None else 'N/D'}
+- Notizie recenti rilevate: {news_light_count if news_light_count is not None else 'N/D'}
+- Earnings imminenti (3-5gg): {'Sì' if has_earnings else 'No'}
+
+Ragiona in autonomia, senza applicare soglie fisse standard (es. RSI 30/70). Rispondi
+SOLO con un oggetto JSON, nessun altro testo, in questo formato esatto:
+{{"decision": "BUY" o "SELL" o "HOLD", "confidence": numero da 0 a 1, "reasoning": "motivazione in 1-2 frasi in italiano"}}"""
+
+    try:
+        r = requests.post(
+            GROQ_API_URL,
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 200,
+            },
+            timeout=20
+        )
+        r.raise_for_status()
+        content = r.json()['choices'][0]['message']['content'].strip()
+        content = content.replace('```json', '').replace('```', '').strip()
+        parsed = json.loads(content)
+
+        supabase.table('ai_agent_decisions').insert({
+            'ticker': ticker,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'model_used': 'groq-llama-3.3-70b',
+            'ai_decision': parsed.get('decision', 'HOLD'),
+            'ai_confidence': float(parsed.get('confidence', 0.5)),
+            'ai_reasoning': parsed.get('reasoning', ''),
+        }).execute()
+        print(f"   🤖 Modulo I: {parsed.get('decision')} (conf={parsed.get('confidence')})")
+    except Exception as e:
+        print(f"⚠️ Modulo I (Groq) errore per {ticker}: {e} — non blocca Modulo B")
+
+
 def generate_signal(indicators, sentiment, context_score, news_light_count, has_earnings):
     score = 0
     if indicators['rsi'] < 30:
@@ -451,6 +508,8 @@ if __name__ == "__main__":
                 print(f"⚠️ Errore aggiornamento status per {ticker}: {e}")
         else:
             write_signal(ticker, candidate['id'], signal)
+            run_ai_agent(ticker, indicators, sentiment, candidate.get('context_score'),
+                         candidate.get('news_light_count'), earnings_soon)
 
         if not args.force_reprocess:
             mark_processed(candidate['id'])
