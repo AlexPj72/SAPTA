@@ -269,6 +269,24 @@ def compute_invalidation(action, close_price, atr):
     return price, reason
 
 
+def compute_target(action, close_price, atr, risk_reward_ratio=2.0):
+    """[NUOVO - recupero pezzi persi] Livello di target/take-profit, simmetrico
+    a compute_invalidation. Distanza = rischio (1.5x ATR) x risk_reward_ratio,
+    quindi 3x ATR di default (rapporto 1:2). Placeholder da calibrare col
+    backtest walk-forward, stesso principio dello stop - non è un valore
+    definitivo, è un punto di partenza operativo."""
+    risk_distance = 1.5 * atr
+    if action == 'BUY':
+        price = close_price + risk_distance * risk_reward_ratio
+        reason = f"Target 1:{risk_reward_ratio:.0f} rischio/rendimento (3x ATR dall'ingresso)"
+    elif action == 'SELL':
+        price = close_price - risk_distance * risk_reward_ratio
+        reason = f"Target 1:{risk_reward_ratio:.0f} rischio/rendimento (3x ATR dall'ingresso)"
+    else:
+        price, reason = None, None
+    return price, reason
+
+
 def generate_signal(indicators, sentiment, context_score, news_light_count, has_earnings):
     score = 0
     if indicators['rsi'] < 30:
@@ -295,6 +313,7 @@ def generate_signal(indicators, sentiment, context_score, news_light_count, has_
     confidence_multiplier = CONFIDENCE_MULTIPLIER.get(confidence_level, 0.4)
     opportunity_type = classify_opportunity(indicators, context_score, news_light_count, has_earnings, net_signal)
     invalidation_price, invalidation_reason = compute_invalidation(action, indicators['close'], indicators['atr'])
+    target_price, target_reason = compute_target(action, indicators['close'], indicators['atr'])
     risk_score = min(1.0, indicators['atr'] / indicators['close'] * 10)
 
     return {
@@ -310,6 +329,8 @@ def generate_signal(indicators, sentiment, context_score, news_light_count, has_
         'has_upcoming_earnings': has_earnings,
         'invalidation_price': invalidation_price,
         'invalidation_reason': invalidation_reason,
+        'target_price': target_price,
+        'target_reason': target_reason,
     }
 
 
@@ -370,6 +391,8 @@ def write_signal(ticker, candidate_id, signal):
             'has_upcoming_earnings': signal['has_upcoming_earnings'],
             'invalidation_price': signal['invalidation_price'],
             'invalidation_reason': signal['invalidation_reason'],
+            'target_price': signal['target_price'],
+            'target_reason': signal['target_reason'],
             'model_version': 'v5.1.1_rule_based',
         }).execute()
         flag = " (barra provvisoria)" if signal['is_provisional_bar'] else ""
