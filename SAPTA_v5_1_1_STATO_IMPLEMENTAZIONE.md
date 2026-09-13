@@ -143,7 +143,35 @@ Inoltre, in questa sessione:
 | Badge fuorviante "HOLD → APPROVATO" in `index.php` | ✅ | **Fix in questa sessione**: badge "APPROVATO/DECLASSATO" ora compare solo per BUY/SELL; HOLD genuino mostra "— nessuna azione" (badge grigio neutro) |
 | File PHP NON sono nel repo GitHub | ⚠️ | Vivono solo su Aruba, gestiti manualmente via File Manager. Se si perde la copia locale/output di una sessione, non c'è backup automatico — valutare se aggiungerli al repo (es. cartella `dashboard/`) in una sessione futura, anche solo come backup, senza per questo servirli da lì |
 
-## 10. Alert aperti dalla spec v5.1.1 §28 (promemoria, non duplicare qui il dettaglio)
+## 11. Pezzi mancanti/persi da recuperare (decisione sessione 13/09)
+
+L'utente ha richiesto di completare SAPTA secondo la filosofia originale delle
+spec precedenti (v3/v4), recuperando pezzi persi nel passaggio a v5.1.1.
+Ordine di lavoro concordato (**tutti e 4, in quest'ordine**):
+
+| # | Attività | Stato | Note |
+|---|---|---|---|
+| 1 | **Target price (take-profit)** | ⬜ | Mai esistito in nessuna versione. Oggi esiste solo `invalidation_price` (stop). Serve un livello simmetrico esplicito (es. ATR-based o rapporto rischio/rendimento minimo 1:2) in Modulo B, accanto a `invalidation_price` in `signals_raw`. Priorità 1: veloce, sblocca segnali "operativi" completi (entry+stop+target) |
+| 2 | **Modulo I (agente IA di ragionamento)** | ⬜ | Previsto in `SAPTA_v4.md` §3 come TERZO CANALE di confronto per la Fase 7 (Umano vs Macchina vs IA), non come sostituto di Modulo B. Riceve dati grezzi post-H2 (non filtrati da E) e produce BUY/SELL/HOLD + confidenza + motivazione testuale via LLM gratuito (Groq Llama 3.3 70B o Gemini 1.5 Flash). L'utente lo vuole ora, non in Fase 7 — spostato in avanti rispetto alla sequenza originale su richiesta esplicita. **Chiarito esplicitamente con l'utente**: non fa proiezioni di prezzo, fa lo stesso tipo di verdetto di Modulo B con ragionamento LLM invece di regole fisse |
+| 3 | **Modello XGBoost** | ⬜ | Previsto fin da v2/v3 ("Fase 4: ML e Segnali"), mai realizzato — Modulo B usa tuttora una formula a punteggio manuale (RSI/MACD/Bollinger/sentiment con pesi fissi +1/+2/-1/-2). Ora possibile addestrarlo per davvero: lo storico necessario è stato caricato in questa sessione (punto 8, sopra). Va validato fuori campione, stesso principio del backtest walk-forward già previsto in Sezione 22 |
+| 4 | **GDELT (rischio geopolitico)** | ⬜ | Presente esplicitamente in `SAPTA_v3.md`/`SAPTA_v4.md` §5.B ("GDELT per il risk score geopolitico di fondo, Goldstein Scale"), sparito senza spiegazione nel passaggio a v5.1.1 (v5.1.1 non lo menziona né lo rimuove esplicitamente — omissione silenziosa, non decisione dichiarata). Da reintegrare come fattore aggiuntivo nel `context_score` di H2 |
+
+**Decisione esplicita sulla sequenza rispetto al test di domani (14/09):** non ancora
+presa esplicitamente dall'utente in chiusura di sessione — la domanda posta era
+se toccare Modulo B/H prima o dopo il test di domani mattina con mercato aperto.
+**Da confermare alla ripresa**, prima di iniziare il punto 1 (target price, che
+tocca `modulo_b_analysis.py`).
+
+**Nota su aspettativa chiarita in questa sessione:** l'utente si aspettava
+"proiezioni/premonizioni" sull'andamento futuro del prezzo (una curva prevista).
+Chiarito esplicitamente che questo non è mai stato nel design di SAPTA in nessuna
+versione, e non è in programma: il sistema classifica anomalie presenti con un
+rendimento atteso stimato, non traccia percorsi di prezzo futuri. I punti 1-4
+sopra sono la risposta concreta al bisogno reale dietro la richiesta ("come faccio
+a sapere quando comprare/vendere, con che limiti"), non un'estensione verso la
+previsione grafica.
+
+---
 
 Vedi `SAPTA_v5_1_1_Corretto.md` Sezione 28 per il testo completo:
 1. Affidabilità feed RSS Google News — da monitorare
