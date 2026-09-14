@@ -80,6 +80,21 @@ Inoltre, in questa sessione:
   `gdelt_tone: 0.15` in `scoring_weights_v1.json` (v2). Committato, **non
   ancora testato con un run reale**.
 
+- **screening_candidates ancora vuota (14/09, verifica completata)**: ipotesi
+  iniziale ("H1 richiede min. 8 barre 15m, non ancora accumulate") **smentita**
+  — ticker con più storia hanno già 9 barre, sopra soglia. Causa più probabile
+  ora: nessun ticker ha superato contemporaneamente le due soglie H1
+  (volume_ratio≥3.0 E |price_change|≥1.5%) — comportamento corretto se vero
+  (mercato calmo), ma **non confermato** (impossibile leggere i log del
+  workflow dalla sandbox). Da verificare con i log reali o abbassando
+  temporaneamente le soglie per test.
+- **Audit esterno (ChatGPT, file `SAPTA_verifica_stato_2026-09-14.md` in
+  root)**: confermate/risolte oggi le sue osservazioni su Modulo I e
+  screening vuota (parzialmente, vedi sopra). Punti del suo audit **ancora
+  del tutto NON iniziati**: backtest/walk-forward completo, paper trading,
+  dashboard/frontend completo (nessun file PHP nel repo), modello XGBoost.
+  Non affrontati in questa sessione.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
