@@ -75,6 +75,11 @@ Inoltre, in questa sessione:
   A. Potrebbe essere normale (mercato calmo) — da confermare con altri cicli
   nella giornata prima di considerarlo un bug.
 
+- **GDELT (14/09)**: integrato in `compute_context_score()` (modulo_h_anomaly.py)
+  via DOC 2.0 API (gratis, no chiave), tono medio per paese su 7gg, peso
+  `gdelt_tone: 0.15` in `scoring_weights_v1.json` (v2). Committato, **non
+  ancora testato con un run reale**.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
