@@ -287,7 +287,9 @@ def compute_target(action, close_price, atr, risk_reward_ratio=2.0):
     return price, reason
 
 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+# Modello: Flash Lite invece di Flash pieno — RPD 500 vs RPD 20 sul tier
+# gratuito (verificato dall'utente su aistudio.google.com/rate-limit, 14/09).
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
 
 
 def run_ai_agent(ticker, indicators, sentiment, context_score, news_light_count, has_earnings):
@@ -316,12 +318,24 @@ SOLO con un oggetto JSON, nessun altro testo, in questo formato esatto:
 {{"decision": "BUY" o "SELL" o "HOLD", "confidence": numero da 0 a 1, "reasoning": "motivazione in 1-2 frasi in italiano"}}"""
 
     try:
+        # Autenticazione via header, non query param: le chiavi Gemini
+        # generate da settembre 2026 sono in formato "AQ." (Auth key) e
+        # vengono rifiutate (401) se passate come ?key=... nell'URL, che
+        # resta valido solo per le vecchie chiavi "AIza..." ormai dismesse
+        # da Google. Vedi forum ufficiale Google AI Developers, thread
+        # multipli su ACCESS_TOKEN_TYPE_UNSUPPORTED.
         r = requests.post(
-            f"{GEMINI_API_URL}?key={GEMINI_API_KEY}",
-            headers={"Content-Type": "application/json"},
+            GEMINI_API_URL,
+            headers={
+                "x-goog-api-key": GEMINI_API_KEY,
+                "Content-Type": "application/json",
+            },
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=20
         )
+        if r.status_code == 429:
+            print(f"⚠️ Modulo I: rate limit Gemini raggiunto per {ticker}, salto (non blocca Modulo B)")
+            return
         r.raise_for_status()
         content = r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         content = content.replace('```json', '').replace('```', '').strip()
