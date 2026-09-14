@@ -51,6 +51,30 @@ Inoltre, in questa sessione:
 
 ---
 
+## 0bis. Novità sessione 14/09 (riepilogo)
+
+- **Modulo I (agente IA Gemini)**: risultava già integrato in
+  `modulo_b_analysis.py` come `run_ai_agent()`, ma rotto — autenticazione
+  `?key=` incompatibile con le chiavi formato `AQ.` (nuovo standard Google
+  da settembre 2026), e modello `gemini-2.5-flash` con RPD 20 troppo basso.
+  **Corretto**: auth via header `x-goog-api-key`, modello
+  `gemini-3.1-flash-lite` (RPD 500). ✅ Codice pronto, non ancora verificato
+  con una decisione reale scritta in `ai_agent_decisions` (vedi sotto).
+- **Bug `pandas_ta` risolto**: il pacchetto installato è
+  `pandas-ta-classic`, si importa come `pandas_ta_classic`, non `pandas_ta`
+  — causava `ModuleNotFoundError` e faceva fallire ogni run di Modulo B.
+- **Target price**: verificato che `compute_target()` era già implementato
+  e collegato (colonna `target_price` già su Supabase) — nessun intervento
+  necessario, punto già chiuso.
+- **GDELT e modello XGBoost**: non ancora verificati/iniziati in questa
+  sessione.
+- **Catena A→H1→H2→B ancora da confermare end-to-end**: dopo i fix, sia
+  Fast che Slow Pipeline sono andati a buon fine, ma `screening_candidates`
+  risultava ancora vuota (zero candidati promossi) — Modulo A scrive
+  regolarmente in `prezzi`, quindi il problema (se reale) è in H1/H2, non in
+  A. Potrebbe essere normale (mercato calmo) — da confermare con altri cicli
+  nella giornata prima di considerarlo un bug.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
