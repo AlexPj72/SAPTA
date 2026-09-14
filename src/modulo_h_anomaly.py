@@ -173,6 +173,49 @@ def fetch_news_light_count(ticker):
         return None
 
 
+_GDELT_COUNTRY_CACHE = {}  # cache per-run: evita chiamate ripetute per lo stesso paese
+
+def fetch_gdelt_tone(country):
+    """[GDELT - rischio geopolitico] Tono medio GDELT (DOC 2.0 API, gratis,
+    nessuna chiave) sulle notizie economiche del paese, ultimi 7gg.
+    Normalizzato da scala GDELT (-10/+10) a -1/+1. Una chiamata per paese
+    per ciclo H2 (cache locale), non per ticker - i ticker .MI condividono
+    'Italy', quelli USA 'United States'.
+    Fail-open: errore/timeout -> 0.0 (neutro), non blocca H2."""
+    if country in _GDELT_COUNTRY_CACHE:
+        return _GDELT_COUNTRY_CACHE[country]
+
+    try:
+        r = requests.get(
+            "https://api.gdeltproject.org/api/v2/doc/doc",
+            params={
+                "query": f"{country} economy",
+                "mode": "timelinetone",
+                "format": "json",
+                "timespan": "7d",
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        points = data["timeline"][0]["data"]
+        values = [p["value"] for p in points if p.get("value") is not None]
+        tone = sum(values) / len(values) if values else 0.0
+        score = max(-1.0, min(1.0, tone / 10.0))
+        _GDELT_COUNTRY_CACHE[country] = score
+        return score
+    except Exception as e:
+        print(f"⚠️ GDELT non disponibile per {country}: {e}")
+        _GDELT_COUNTRY_CACHE[country] = 0.0
+        return 0.0
+
+
+def get_country_for_ticker(ticker):
+    """Mappatura minima ticker->paese, coerente con i due mercati coperti
+    da universe.py (USA, IT). Da estendere se si aggiungono altri mercati."""
+    return "Italy" if ticker.endswith(".MI") else "United States"
+
+
 def compute_context_score(ticker):
     """
     [Sezione 7] Trend (SMA200, SMA50 vs SMA200) + distanza da massimi/minimi.
@@ -202,11 +245,14 @@ def compute_context_score(ticker):
         span = high_52w - low_52w
         distance_norm = ((current - low_52w) / span * 2 - 1) if span > 0 else 0.0  # -1..+1
 
+        gdelt_score = fetch_gdelt_tone(get_country_for_ticker(ticker))
+
         w = CONTEXT_WEIGHTS
         score = (
             w.get('trend_sma200', 0) * trend_sma200
             + w.get('trend_sma50_vs_200', 0) * trend_sma50_vs_200
             + w.get('distance_from_extremes', 0) * distance_norm
+            + w.get('gdelt_tone', 0) * gdelt_score
         )
         return round(score, 4)
     except Exception as e:
