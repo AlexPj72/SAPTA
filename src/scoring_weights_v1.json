@@ -1,10 +1,11 @@
 {
-  "version": "v1",
-  "_nota": "Placeholder non calibrati - vedi SAPTA v5.1.1 Sezione 28 alert 4. Da validare con backtest walk-forward prima del paper trading. Non modificare senza incrementare 'version'.",
+  "version": "v2",
+  "_nota": "Placeholder non calibrati - vedi SAPTA v5.1.1 Sezione 28 alert 4. Da validare con backtest walk-forward prima del paper trading. Non modificare senza incrementare 'version'. v2 (14/09): aggiunto gdelt_tone, altri pesi ribilanciati proporzionalmente per mantenere somma=1.00.",
   "context_weights": {
-    "trend_sma200": 0.45,
-    "trend_sma50_vs_200": 0.25,
-    "distance_from_extremes": 0.30
+    "trend_sma200": 0.38,
+    "trend_sma50_vs_200": 0.21,
+    "distance_from_extremes": 0.26,
+    "gdelt_tone": 0.15
   },
   "confidence_multiplier": {
     "alto": 1.0,
