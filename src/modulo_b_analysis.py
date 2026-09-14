@@ -23,7 +23,7 @@ import argparse
 import yfinance as yf
 import requests
 import pandas as pd
-import pandas_ta as ta
+import pandas_ta_classic as ta
 from datetime import datetime, timedelta, timezone
 from config import supabase, NEWSAPI_KEY, HUGGINGFACE_API_KEY, NEWS_CACHE_MINUTES, GEMINI_API_KEY
 from universe import get_universe_metadata
