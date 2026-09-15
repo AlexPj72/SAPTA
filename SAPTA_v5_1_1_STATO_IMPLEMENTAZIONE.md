@@ -128,11 +128,22 @@ Inoltre, in questa sessione:
   **Caveat da verificare**: mediana 0.00% molto sotto la media suggerisce
   che molte finestre non generano mai un trade (RSI+MACD+BB raramente si
   allineano insieme) — il win rate alto potrebbe basarsi su pochi trade
-  reali, non centinaia. Non ancora scomposto "finestre con trade vs senza".
+  reali, non centinaia. **Scomposto (15/09)**: 446/734 finestre (60.8%) senza alcun trade;
+  nelle 288 attive, ~1 trade/finestra in media, rendimento medio +14.86%
+  quando scatta, ma campione di poche centinaia di trade reali totali —
+  incoraggiante ma non statisticamente solido.
   Testato solo il canale rule-based, non IA/XGBoost (storico insufficiente
   per quelli). **Con questo, tutti i 6 punti dell'audit ChatGPT del 14/09
   sono stati affrontati** (non tutti "risolti al 100%", vedi dettagli sopra
   per ciascuno).
+
+- **Verdetto esplicito (15/09): paper trading SÌ pronto per iniziare;
+  trading automatico NO, non pronto.** Motivi per l'automatico: campione
+  backtest piccolo, ai_agent_decisions mai popolata con dati live (zero
+  confronto reale tra i 3 canali), XGBoost debole (44% accuracy), nessuna
+  integrazione IBKR nel codice, nessun controllo di rischio testato live.
+  Decisione di passare all'automatico da trattare come conversazione
+  dedicata separata, non come punto di lista.
 
 ## 1. Database (Supabase)
 
