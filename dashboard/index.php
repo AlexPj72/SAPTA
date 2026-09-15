@@ -38,6 +38,7 @@ $current_capital = $capital_history[0]['capital_eur'] ?? null;
             Capitale corrente:
             <strong><?= $current_capital !== null ? '€' . number_format($current_capital, 2) : 'Non impostato' ?></strong>
             — <a href="capital.php" style="color:#fff;">gestisci capitale</a>
+            — <a href="decisions.php" style="color:#fff;">decisioni (paper trading)</a>
         </p>
         <p>Ultimo aggiornamento pagina: <?= date('d/m/Y H:i') ?></p>
     </header>
@@ -73,6 +74,7 @@ $current_capital = $capital_history[0]['capital_eur'] ?? null;
                             <span class="badge hold">— nessuna azione</span>
                         <?php elseif (!empty($s['filter_passed'])): ?>
                             <span class="badge approved">✅ APPROVATO</span>
+                            <br><a href="decisions.php?ticker=<?= urlencode($s['ticker']) ?>&signal_id=<?= (int) $s['id'] ?>">registra decisione</a>
                         <?php else: ?>
                             <span class="badge rejected">❌ DECLASSATO</span>
                             <br><small><?= htmlspecialchars($s['filter_reason'] ?? '') ?></small>
