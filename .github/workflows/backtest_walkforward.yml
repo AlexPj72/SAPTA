@@ -1,0 +1,38 @@
+name: SAPTA Backtest Walk-Forward (one-off, manuale)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements-slow.txt
+
+      - name: Run walk-forward backtest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_f_backtest.py
+
+      - name: Commit report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add BACKTEST_WALKFORWARD_REPORT.md
+          git diff --staged --quiet || git commit -m "Backtest walk-forward: aggiorna report ($(date -u +%Y-%m-%d))"
+          git push
