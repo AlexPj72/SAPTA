@@ -7,6 +7,17 @@ Questo documento è il registro delle sessioni di lavoro eseguite da ChatGPT sul
 
 ---
 
+## Decisioni progettuali da mantenere
+
+### Broker per il futuro trading automatico
+- **Broker scelto: Interactive Brokers (IBKR).**
+- Alpaca è stato escluso e **non deve essere considerato il broker di riferimento di SAPTA**.
+- La scelta di IBKR va mantenuta tra le attività/decisioni del progetto perché il percorso previsto comprende una fase di **paper/virtual trading prima di qualsiasi investimento reale**.
+- Requisiti della scelta: supporto dei mercati europei oltre a quelli USA e disponibilità di un ambiente di paper trading/API per validare SAPTA prima dell'operatività reale.
+- **Da fare:** integrare/verificare IBKR nel Modulo G / fase di esecuzione quando SAPTA avrà superato le fasi di validazione e paper trading previste.
+
+---
+
 ## Sessione 15/09/2026 – Restyling Dashboard e nuova pagina Universo
 
 ### Richiesta
@@ -56,7 +67,13 @@ Questo documento è il registro delle sessioni di lavoro eseguite da ChatGPT sul
 - **Nessuna modifica alle pipeline/workflow GitHub Actions.**
 - `SAPTA_v5_1_1_STATO_IMPLEMENTAZIONE.md` non è stato modificato.
 
+### Sessione 15/09/2026 – Ripristino `dashboard/index.php`
+- Ripristinata la versione precedente di `dashboard/index.php`, su richiesta dell'utente.
+- La versione ripristinata corrisponde al blob SHA `23077359ce2b2ea8395e26f87bb041b4865d8491`.
+- **Commit:** `bbbebbb304c95fcf49c791edb01c877186e9cbf6`
+- `dashboard/universo.php` e il nuovo `dashboard/assets/style.css` non sono stati modificati in questa operazione.
+
 ### Stato
-Dashboard frontend aggiornato e nuova sezione Universo implementata su `main`.
+Dashboard frontend aggiornato e nuova sezione Universo implementata su `main`; `dashboard/index.php` è stato successivamente riportato alla versione precedente richiesta dall'utente.
 
 ---
