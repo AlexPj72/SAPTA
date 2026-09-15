@@ -53,6 +53,7 @@ $current_capital = $capital_history[0]['capital_eur'] ?? null;
                     <th>Azione Originale</th>
                     <th>Azione Filtrata</th>
                     <th>Rendimento Netto Atteso</th>
+                    <th>Target / Invalidation</th>
                     <th>Stato</th>
                 </tr>
             </thead>
@@ -63,12 +64,16 @@ $current_capital = $capital_history[0]['capital_eur'] ?? null;
                 <?php foreach ($signals as $s): ?>
                 <tr>
                     <td><?= date('d/m H:i', strtotime($s['timestamp'])) ?></td>
-                    <td><strong><?= htmlspecialchars($s['ticker']) ?></strong></td>
+                    <td><strong><a href="grafico.php?ticker=<?= urlencode($s['ticker']) ?>"><?= htmlspecialchars($s['ticker']) ?></a></strong></td>
                     <td><?= htmlspecialchars($s['original_action']) ?></td>
                     <td class="<?= $s['filtered_action'] === 'HOLD' ? 'declassato' : '' ?>">
                         <?= htmlspecialchars($s['filtered_action']) ?>
                     </td>
                     <td><?= number_format(($s['expected_net_return'] ?? 0) * 100, 2) ?>%</td>
+                    <td>
+                        <?= isset($s['target_price']) ? '🎯 €' . number_format($s['target_price'], 2) : '—' ?><br>
+                        <?= isset($s['invalidation_price']) ? '🛑 €' . number_format($s['invalidation_price'], 2) : '—' ?>
+                    </td>
                     <td>
                         <?php if ($s['filtered_action'] === 'HOLD' && $s['original_action'] === 'HOLD'): ?>
                             <span class="badge hold">— nessuna azione</span>
