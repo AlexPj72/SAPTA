@@ -121,6 +121,19 @@ Inoltre, in questa sessione:
   scelto per il futuro trading automatico è Interactive Brokers (IBKR),
   non Alpaca.** Fase 5, solo dopo validazione paper trading completa.
 
+- **Backtest walk-forward (15/09): completato, ultimo punto audit
+  ChatGPT.** Modulo F riscritto (era: singola finestra, solo RSI, metriche
+  hardcoded a 0.0). Ora: 734 finestre da 6 mesi su 134 ticker,
+  rendimento medio +4.69%/finestra, Sharpe 0.56, win rate 94.4%.
+  **Caveat da verificare**: mediana 0.00% molto sotto la media suggerisce
+  che molte finestre non generano mai un trade (RSI+MACD+BB raramente si
+  allineano insieme) — il win rate alto potrebbe basarsi su pochi trade
+  reali, non centinaia. Non ancora scomposto "finestre con trade vs senza".
+  Testato solo il canale rule-based, non IA/XGBoost (storico insufficiente
+  per quelli). **Con questo, tutti i 6 punti dell'audit ChatGPT del 14/09
+  sono stati affrontati** (non tutti "risolti al 100%", vedi dettagli sopra
+  per ciascuno).
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
