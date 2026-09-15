@@ -86,8 +86,10 @@ Inoltre, in questa sessione:
   ora: nessun ticker ha superato contemporaneamente le due soglie H1
   (volume_ratio≥3.0 E |price_change|≥1.5%) — comportamento corretto se vero
   (mercato calmo), ma **non confermato** (impossibile leggere i log del
-  workflow dalla sandbox). Da verificare con i log reali o abbassando
-  temporaneamente le soglie per test.
+  workflow dalla sandbox). **Confermato con log reale (15/09, 01:02 UTC)**: "0 candidati
+  grezzi trovati su 135 ticker" — comportamento corretto, non un bug. A
+  mercati chiusi zero anomalie è normale; da riverificare a mercati aperti
+  per vedere il comportamento con volatilità reale.
 - **Audit esterno (ChatGPT, file `SAPTA_verifica_stato_2026-09-14.md` in
   root)**: confermate/risolte oggi le sue osservazioni su Modulo I e
   screening vuota (parzialmente, vedi sopra). Punti del suo audit **ancora
