@@ -105,6 +105,22 @@ Inoltre, in questa sessione:
   `XGBOOST_TRAINING_REPORT.md`. Da rivedere (soglie label, feature, bilanciamento
   storico tra ticker) prima di considerarlo un canale utilizzabile.
 
+- **Dashboard (14-15/09): punto 4+5 audit ChatGPT avanzati in parallelo da
+  due AI (Claude + ChatGPT), poi riconciliati senza conflitti reali.**
+  Aggiunto: `decisions.php` (paper trading, human_decisions con policy
+  INSERT/UPDATE), `grafico.php` (storico giornaliero + intraday 15m,
+  overlay target/invalidation), colonna target/invalidation in `index.php`,
+  fix backend (`target_price` non passava da Modulo B a `signals_filtered`
+  — bug reale corretto). ChatGPT ha aggiunto `universo.php` (tutti i ticker
+  dell'universo, non solo quelli con segnali) e restyling di `style.css`.
+  Verificato live su pujia.it: tutto coerente, nessun lavoro perso. Causa
+  di un falso allarme ("vedo solo 3 link"): normale, il link al grafico è
+  per-ticker in tabella, non in header. Causa di letture stantie da parte
+  di Claude: caching lato Aruba, ora disabilitato dall'utente.
+- **Decisione da mantenere (fonte: chatgpt_implementazione.md): broker
+  scelto per il futuro trading automatico è Interactive Brokers (IBKR),
+  non Alpaca.** Fase 5, solo dopo validazione paper trading completa.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
