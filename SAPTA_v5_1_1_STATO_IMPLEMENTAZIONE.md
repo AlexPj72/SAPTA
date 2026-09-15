@@ -97,6 +97,14 @@ Inoltre, in questa sessione:
   dashboard/frontend completo (nessun file PHP nel repo), modello XGBoost.
   Non affrontati in questa sessione.
 
+- **XGBoost (14-15/09): addestrato, NON pronto per produzione.** Script e
+  workflow committati, primo training reale eseguito (split temporale
+  2025-01-01, out-of-sample). Risultato: accuracy 44%, di poco sopra il
+  livello "predici sempre HOLD" (41.6% della distribuzione test); SELL
+  riconosciuto male (recall 0.07). Report completo in
+  `XGBOOST_TRAINING_REPORT.md`. Da rivedere (soglie label, feature, bilanciamento
+  storico tra ticker) prima di considerarlo un canale utilizzabile.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
