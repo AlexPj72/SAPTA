@@ -33,12 +33,13 @@ $current_capital = $capital_history[0]['capital_eur'] ?? null;
 </head>
 <body>
     <header>
-        <h1>SAPTA v5.1.1 — Dashboard</h1>
+        <h1>SAPTA v5.1.1 — Dashboard [[TEST-MARKER-OK-<?= date('His') ?>]]</h1>
         <p>
             Capitale corrente:
             <strong><?= $current_capital !== null ? '€' . number_format($current_capital, 2) : 'Non impostato' ?></strong>
             — <a href="capital.php" style="color:#fff;">gestisci capitale</a>
             — <a href="decisions.php" style="color:#fff;">decisioni (paper trading)</a>
+            — <a href="universo.php" style="color:#fff;">universo</a>
         </p>
         <p>Ultimo aggiornamento pagina: <?= date('d/m/Y H:i') ?></p>
     </header>
