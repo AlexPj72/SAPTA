@@ -1,0 +1,18 @@
+{
+  "feature_columns": [
+    "rsi",
+    "macd",
+    "macd_signal",
+    "bb_position",
+    "atr_pct"
+  ],
+  "label_map": {
+    "SELL": 0,
+    "HOLD": 1,
+    "BUY": 2
+  },
+  "train_cutoff_date": "2025-01-01",
+  "forward_days": 5,
+  "return_threshold": 0.02,
+  "trained_at": "2026-09-15T01:08:47.968368+00:00"
+}
