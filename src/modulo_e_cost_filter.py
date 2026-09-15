@@ -209,6 +209,7 @@ def filter_signals(tickers_filter=None):
             atr = signal.get('atr')
             confidence_multiplier = signal.get('confidence_multiplier', 0.4)
             invalidation_price = signal.get('invalidation_price')
+            target_price = signal.get('target_price')
 
             if not price or not atr:
                 print(f"⚠️ {ticker}: segnale senza price/ATR, salto")
@@ -257,6 +258,7 @@ def filter_signals(tickers_filter=None):
                 'opportunity_type': signal.get('opportunity_type'),
                 'confidence_level': signal.get('confidence_level'),
                 'invalidation_price': invalidation_price,
+                'target_price': target_price,
                 'invalidation_reason': signal.get('invalidation_reason'),
                 'liquidity_bucket': liquidity_bucket,
                 'slippage_applied_percent': returns['slippage_applied_percent'],
