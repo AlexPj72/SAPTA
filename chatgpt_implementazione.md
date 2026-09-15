@@ -18,6 +18,55 @@ Questo documento è il registro delle sessioni di lavoro eseguite da ChatGPT sul
 
 ---
 
+## Cose ancora da fare – Fase 5 / integrazione broker IBKR
+
+1. **Definire l'interfaccia IBKR/API di SAPTA**
+   - scegliere il canale API da utilizzare;
+   - definire autenticazione/sessione e gestione delle credenziali in sicurezza;
+   - definire le funzioni broker necessarie.
+
+2. **Realizzare il modulo broker IBKR**
+   - connessione al broker;
+   - lettura conto/capitale disponibile;
+   - lettura posizioni;
+   - invio ordini;
+   - modifica e cancellazione ordini;
+   - gestione degli esiti e degli errori;
+   - registrazione dei dati delle operazioni.
+
+3. **Collegare il broker al motore decisionale SAPTA**
+   - dati di mercato → analisi/AI → segnale → risk management → ordine IBKR;
+   - impedire l'esecuzione di ordini che non superano i controlli previsti.
+
+4. **Implementare e validare il paper trading IBKR**
+   - collegamento all'account paper;
+   - verifica di quantità, prezzo, capitale e posizione;
+   - simulazione/validazione di ordini, stop loss e take profit;
+   - registrazione completa delle operazioni nel database.
+
+5. **Implementare i controlli di sicurezza prima dell'automazione**
+   - limite per singola operazione;
+   - limite di perdita giornaliera;
+   - controllo del capitale disponibile;
+   - controllo delle posizioni già aperte;
+   - prevenzione degli ordini duplicati;
+   - kill switch/blocco immediato dell'esecuzione;
+   - logging completo e tracciabilità.
+
+6. **Eseguire i test end-to-end**
+   - verificare l'intero flusso da segnale SAPTA a ordine paper IBKR;
+   - verificare errori, rifiuti, riconnessioni e casi anomali;
+   - validare che i limiti di rischio blocchino correttamente le operazioni.
+
+7. **Solo dopo la validazione paper**
+   - valutare il passaggio all'operatività reale;
+   - iniziare con capitale limitato e supervisione;
+   - non collegare l'account reale prima del completamento dei test e della validazione prevista.
+
+**Nota:** l'integrazione software può essere sviluppata e testata senza collegare ora un account IBKR reale.
+
+---
+
 ## Sessione 15/09/2026 – Restyling Dashboard e nuova pagina Universo
 
 ### Richiesta
@@ -75,5 +124,17 @@ Questo documento è il registro delle sessioni di lavoro eseguite da ChatGPT sul
 
 ### Stato
 Dashboard frontend aggiornato e nuova sezione Universo implementata su `main`; `dashboard/index.php` è stato successivamente riportato alla versione precedente richiesta dall'utente.
+
+---
+
+## Sessione 15/09/2026 – Aggiornamento attività future Fase 5
+
+### Richiesta
+- Salvare in `chatgpt_implementazione.md` le attività ancora da completare per l'implementazione della Fase 5 con il broker scelto IBKR.
+
+### Modifica effettuata da ChatGPT
+- Aggiunta la sezione **"Cose ancora da fare – Fase 5 / integrazione broker IBKR"** con le attività di progettazione API, modulo broker, collegamento al motore decisionale, paper trading, controlli di sicurezza, test end-to-end e successiva eventuale attivazione reale.
+- Nessun altro file del progetto è stato modificato.
+- `SAPTA_v5_1_1_STATO_IMPLEMENTAZIONE.md` non è stato modificato.
 
 ---
