@@ -1,6 +1,6 @@
 {
-  "version": "v2",
-  "_nota": "Placeholder non calibrati - vedi SAPTA v5.1.1 Sezione 28 alert 4. Da validare con backtest walk-forward prima del paper trading. Non modificare senza incrementare 'version'. v2 (14/09): aggiunto gdelt_tone, altri pesi ribilanciati proporzionalmente per mantenere somma=1.00.",
+  "version": "v3",
+  "_nota": "Placeholder non calibrati - vedi SAPTA v5.1.1 Sezione 28 alert 4. Da validare con backtest walk-forward prima del paper trading. Non modificare senza incrementare 'version'. v2 (14/09): aggiunto gdelt_tone, altri pesi ribilanciati proporzionalmente per mantenere somma=1.00. v3 (16/09): aggiunto ranking_weights (Sezione 16, Modulo E) - score combinato per il ranking finale delle opportunita' BUY/SELL approvate. Normalizzazioni usate in modulo_e_cost_filter.py: anomaly_score soft-cap a 20, expected_net_return soft-cap a 5%, context_score da -1/+1 a 0/1. Somma pesi positivi 0.90, risk_penalty (0.10) sottratto.",
   "context_weights": {
     "trend_sma200": 0.38,
     "trend_sma50_vs_200": 0.21,
@@ -16,5 +16,13 @@
     "LIQ_HIGH": 0.05,
     "LIQ_MEDIUM": 0.15,
     "LIQ_LOW": 0.40
+  },
+  "ranking_weights": {
+    "anomaly": 0.30,
+    "context": 0.15,
+    "confidence": 0.20,
+    "net_return": 0.20,
+    "data_quality": 0.05,
+    "risk_penalty": 0.10
   }
 }
