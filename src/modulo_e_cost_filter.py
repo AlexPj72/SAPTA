@@ -11,14 +11,44 @@ Cambiamenti rispetto a v3.2:
   capitale*2% / (ATR*2), ma capitale*rischio% / (entry - invalidation_price).
   Richiede invalidation_price da Modulo B - se manca, il segnale viene
   saltato invece di stimare un valore arbitrario.
+
+[NUOVO 16/09] Sezione 15 (Rischio di portafoglio) + Sezione 16 (Ranking):
+- check_sector_concentration() esisteva già (v5.1.1) e copre sia la
+  concentrazione settoriale sia, come approssimazione esplicitamente
+  permessa dalla spec ("una stima semplice basata su settore/mercato e'
+  sufficiente in questa fase"), la correlazione approssimata.
+- NUOVO: check_portfolio_exposure() - esposizione totale stimata se tutte
+  le opportunita' BUY approvate nella finestra venissero eseguite insieme,
+  confrontata col capitale corrente. Se supera la soglia, declassa a HOLD
+  come gia' avviene per la concentrazione settoriale (stesso pattern).
+- NUOVO: compute_final_rank_score() - score combinato Sezione 16 (anomaly,
+  contesto, confidenza, rendimento netto, qualita' dato, penalita' di
+  rischio). Pesi in scoring_weights_v1.json (ranking_weights, v3) -
+  PLACEHOLDER NON CALIBRATI, stesso principio di context_weights: da
+  validare con backtest walk-forward prima di dare peso operativo al
+  ranking, non solo ordinale/informativo.
 """
 import argparse
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from config import supabase
 
 # [v5.1.1] Sostituisce SECTOR_MAP hardcoded - non più importato da config.py
 MAX_POSITIONS_PER_SECTOR = 2
 SECTOR_EXPOSURE_LOOKBACK_DAYS = 10
+
+# [Sezione 15 - NUOVO 16/09] Esposizione totale massima stimata, come
+# frazione del capitale corrente, se tutte le posizioni BUY approvate nella
+# finestra di lookback (stessa di MAX_POSITIONS_PER_SECTOR) venissero
+# eseguite insieme. Placeholder non calibrato - vedi nota in testa al file.
+MAX_PORTFOLIO_EXPOSURE_PERCENT = 0.60
+
+WEIGHTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scoring_weights_v1.json')
+with open(WEIGHTS_PATH) as f:
+    _WEIGHTS = json.load(f)
+RANKING_WEIGHTS = _WEIGHTS.get('ranking_weights', {})
+SCORING_WEIGHTS_VERSION = _WEIGHTS['version']
 
 # [Sezione 12] Valori di default, non calibrati - vedi v5.1.1 §28 alert 4
 SLIPPAGE_BY_LIQUIDITY = {
@@ -177,6 +207,76 @@ def check_sector_concentration(ticker, sector, lookback_days, max_per_sector):
         return True, 0
 
 
+def check_portfolio_exposure(new_position_eur, capital, lookback_days, max_exposure_percent):
+    """[Sezione 15 - NUOVO 16/09] Esposizione totale stimata: somma del
+    position_size_suggested (in EUR, gia' calcolato da Sezione 13) di tutte
+    le opportunita' BUY approvate nella finestra di lookback, piu' la nuova
+    candidata, confrontata col capitale corrente. Fail-open come il
+    controllo di concentrazione settoriale: errore -> non blocca il job."""
+    try:
+        threshold = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+        response = (supabase.table('signals_filtered')
+                    .select('position_size_suggested')
+                    .eq('filtered_action', 'BUY')
+                    .eq('filter_passed', True)
+                    .gte('timestamp', threshold)
+                    .execute())
+        existing_exposure = sum(
+            float(r['position_size_suggested']) for r in (response.data or [])
+            if r.get('position_size_suggested')
+        )
+        total_exposure = existing_exposure + (new_position_eur or 0)
+        exposure_pct = total_exposure / capital if capital else 1.0
+        return exposure_pct <= max_exposure_percent, exposure_pct
+    except Exception as e:
+        print(f"⚠️ Errore controllo esposizione di portafoglio: {e}")
+        return True, 0.0
+
+
+def get_screening_candidates_map(candidate_ids):
+    """Una sola query per tutti i candidati del batch corrente, invece di
+    una query per segnale - stesso pattern di get_ticker_meta_map in H."""
+    if not candidate_ids:
+        return {}
+    try:
+        response = (supabase.table('screening_candidates')
+                    .select('id, anomaly_score, context_score, data_quality_flag')
+                    .in_('id', list(candidate_ids))
+                    .execute())
+        return {row['id']: row for row in (response.data or [])}
+    except Exception as e:
+        print(f"⚠️ Errore lettura screening_candidates per ranking: {e}")
+        return {}
+
+
+def compute_final_rank_score(anomaly_score, context_score, confidence_multiplier,
+                              expected_net_return, data_quality_flag, risk_penalty):
+    """[Sezione 16 - NUOVO 16/09] Score combinato 0-100, solo per opportunita'
+    BUY/SELL approvate (le HOLD non vengono ranked). PLACEHOLDER NON
+    CALIBRATO: normalizzazioni (soft cap anomaly a 20, rendimento netto a
+    5%) e pesi (ranking_weights in scoring_weights_v1.json) sono punti di
+    partenza ragionevoli, da validare col backtest walk-forward (Sezione 22)
+    prima di dare peso operativo al ranking - vedi nota in testa al file."""
+    if not RANKING_WEIGHTS:
+        return None
+
+    anomaly_norm = min((anomaly_score or 0) / 20.0, 1.0)
+    context_norm = ((context_score or 0.0) + 1) / 2  # -1..+1 -> 0..1, neutro (0.5) se mancante
+    return_norm = min(max((expected_net_return or 0) / 0.05, 0.0), 1.0)
+    data_quality_score = 1.0 if data_quality_flag == 'ok' else 0.5
+
+    w = RANKING_WEIGHTS
+    score = (
+        w.get('anomaly', 0) * anomaly_norm
+        + w.get('context', 0) * context_norm
+        + w.get('confidence', 0) * (confidence_multiplier or 0)
+        + w.get('net_return', 0) * return_norm
+        + w.get('data_quality', 0) * data_quality_score
+        - w.get('risk_penalty', 0) * min(risk_penalty or 0, 1.0)
+    )
+    return round(score * 100, 2)
+
+
 def filter_signals(tickers_filter=None):
     try:
         threshold = (datetime.now(timezone.utc) - timedelta(minutes=35)).isoformat()
@@ -202,6 +302,12 @@ def filter_signals(tickers_filter=None):
         # una query Supabase per ogni ticker.
         current_capital = get_current_capital()
         print(f"💰 Capitale corrente: €{current_capital:,.2f}")
+
+        # [Sezione 16 - NUOVO 16/09] Batch fetch di anomaly_score/context_score
+        # dai candidati H2 collegati, una sola query per l'intero run.
+        candidate_ids = {s['screening_candidate_id'] for s in signals_to_process
+                          if s.get('screening_candidate_id')}
+        candidates_map = get_screening_candidates_map(candidate_ids)
 
         for signal in signals_to_process:
             ticker = signal['ticker']
@@ -235,6 +341,8 @@ def filter_signals(tickers_filter=None):
                 if signal['action'] != 'HOLD' else "Azione originale già HOLD"
             )
 
+            sector_count = 0
+            exposure_pct = 0.0
             if filter_passed and filtered_action == 'BUY':
                 sector_ok, sector_count = check_sector_concentration(
                     ticker, sector, SECTOR_EXPOSURE_LOOKBACK_DAYS, MAX_POSITIONS_PER_SECTOR
@@ -243,6 +351,36 @@ def filter_signals(tickers_filter=None):
                     filter_passed = False
                     filtered_action = 'HOLD'
                     filter_reason = f"Concentrazione settoriale: già {sector_count} posizioni in '{sector}' (max {MAX_POSITIONS_PER_SECTOR})"
+
+            # [Sezione 15 - NUOVO 16/09] Esposizione totale stimata di portafoglio,
+            # controllata solo se il segnale è ancora BUY dopo il filtro settoriale.
+            if filter_passed and filtered_action == 'BUY':
+                new_position_eur = (position_size or 0) * price
+                exposure_ok, exposure_pct = check_portfolio_exposure(
+                    new_position_eur, current_capital, SECTOR_EXPOSURE_LOOKBACK_DAYS,
+                    MAX_PORTFOLIO_EXPOSURE_PERCENT
+                )
+                if not exposure_ok:
+                    filter_passed = False
+                    filtered_action = 'HOLD'
+                    filter_reason = (
+                        f"Esposizione di portafoglio stimata {exposure_pct:.0%} "
+                        f"> soglia {MAX_PORTFOLIO_EXPOSURE_PERCENT:.0%}"
+                    )
+
+            # [Sezione 16 - NUOVO 16/09] Ranking, solo per opportunità
+            # ancora BUY/SELL dopo tutti i filtri di Sezione 12+15.
+            final_rank_score = None
+            if filter_passed and filtered_action != 'HOLD':
+                candidate = candidates_map.get(signal.get('screening_candidate_id'), {})
+                final_rank_score = compute_final_rank_score(
+                    anomaly_score=candidate.get('anomaly_score'),
+                    context_score=candidate.get('context_score'),
+                    confidence_multiplier=confidence_multiplier,
+                    expected_net_return=returns['expected_net_return'],
+                    data_quality_flag=candidate.get('data_quality_flag'),
+                    risk_penalty=exposure_pct,
+                )
 
             supabase.table('signals_filtered').insert({
                 'timestamp': signal['timestamp'],
@@ -262,10 +400,14 @@ def filter_signals(tickers_filter=None):
                 'invalidation_reason': signal.get('invalidation_reason'),
                 'liquidity_bucket': liquidity_bucket,
                 'slippage_applied_percent': returns['slippage_applied_percent'],
+                'sector_concentration_count': sector_count,
+                'portfolio_exposure_pct': round(exposure_pct, 4),
+                'final_rank_score': final_rank_score,
             }).execute()
 
             status = "✅ APPROVATO" if filter_passed else f"❌ DECLASSATO ({filter_reason})"
-            print(f"{ticker}: {signal['action']} → {filtered_action} {status}")
+            rank_info = f" | rank={final_rank_score}" if final_rank_score is not None else ""
+            print(f"{ticker}: {signal['action']} → {filtered_action} {status}{rank_info}")
 
     except Exception as e:
         print(f"❌ Errore filtro costi: {e}")
