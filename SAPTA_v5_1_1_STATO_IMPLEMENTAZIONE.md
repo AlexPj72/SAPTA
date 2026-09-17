@@ -200,6 +200,22 @@ Inoltre, in questa sessione:
   invece di rompersi.
 - Nuova pagina `dashboard/briefing.php`: mostra la shortlist del giorno con
   lo stesso disclaimer, link ai grafici, e rimando alla Chat AI.
+- **Ricevuto dall'utente un documento unificato (ChatGPT, "SAPTA v6")** con
+  audit + critica architetturale alla Chat AI + roadmap. Diagnosi condivisa:
+  la Chat AI era troppo "passiva" (rispondeva solo su un contesto fisso
+  pre-caricato). Sequenza concordata: prima consolidare/validare quanto
+  esiste, **in parallelo** trasformare la Chat AI (Fase 2), poi eventuale
+  AI Analyst Team multi-agente (Fase 3+, non ancora iniziata - complessità
+  prematura su una base non ancora validata).
+- **Fase 2 completata in questa sessione**: `chat.php`/`helpers.php`
+  riscritti con vero **tool layer** (function calling Gemini) — 4 funzioni
+  (`get_universe_movers`, `get_ticker_detail`, `get_screening_activity_today`,
+  `get_sector_peers`) che eseguono query reali su Supabase on-demand,
+  invece di un contesto fisso caricato una volta. Eliminata la frase
+  "non dispongo di analisi previsionali" dal comportamento atteso, sostituita
+  da: spiega il limite strutturale in una frase, poi usa comunque i tool per
+  un'analisi sistematica. Testato in locale (tutte le funzioni tool con dati
+  finti): nessun warning/errore.
 
 ## 1. Database (Supabase)
 
