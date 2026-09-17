@@ -1,46 +1,29 @@
 <?php
 require_once 'config.php';
+require_once 'helpers.php';
 
-// Gestione submit form (impostazione nuovo capitale)
-$message = '';
+$message = ''; $message_error = false;
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['capital_eur'])) {
     $new_capital = (float) str_replace(',', '.', $_POST['capital_eur']);
     $change_type = $_POST['change_type'] ?? 'manual_set';
     $note = trim($_POST['note'] ?? '');
 
     if ($new_capital > 0) {
-        $ch = curl_init(SUPABASE_URL . '/rest/v1/capital_state');
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'apikey: ' . SUPABASE_ANON_KEY,
-            'Authorization: Bearer ' . SUPABASE_ANON_KEY,
-            'Content-Type: application/json',
-            'Prefer: return=minimal'
-        ]);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+        $code = supabase_write('capital_state', [
             'capital_eur' => $new_capital,
             'change_type' => $change_type,
             'note' => $note,
-            'set_by' => 'dashboard'
-        ]));
-        curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        $message = $http_code === 201
-            ? "✅ Capitale aggiornato a €" . number_format($new_capital, 2)
-            : "❌ Errore nell'aggiornamento (HTTP $http_code)";
+            'set_by' => 'dashboard',
+        ]);
+        $message = $code === 201 ? "Capitale aggiornato a " . fmt_eur($new_capital) : "Errore nell'aggiornamento (HTTP $code)";
+        $message_error = $code !== 201;
     } else {
-        $message = "❌ Inserisci un valore maggiore di zero";
+        $message = "Inserisci un valore maggiore di zero";
+        $message_error = true;
     }
 }
 
-// Capitale corrente e storico
-$history = supabase_query('capital_state', [
-    'select' => '*',
-    'order' => 'created_at.desc',
-    'limit' => 15
-]);
+$history = supabase_query('capital_state', ['select' => '*', 'order' => 'created_at.desc', 'limit' => 15]);
 $current = $history[0]['capital_eur'] ?? null;
 ?>
 <!DOCTYPE html>
@@ -48,59 +31,75 @@ $current = $history[0]['capital_eur'] ?? null;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SAPTA — Gestione Capitale</title>
+    <title>SAPTA — Capitale</title>
     <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
-    <header>
-        <h1>SAPTA — Capitale Operativo</h1>
-        <p><a href="index.php" style="color:#fff;">&larr; torna alla dashboard</a></p>
-    </header>
 
-    <section>
-        <h2>Capitale corrente</h2>
-        <p style="font-size: 2em; font-weight: bold;">
-            <?= $current !== null ? '€' . number_format($current, 2) : 'Non impostato' ?>
-        </p>
+<header class="hero compact">
+    <div class="hero-top">
+        <div>
+            <div class="eyebrow">SAPTA v5.1.1</div>
+            <h1>Capitale operativo</h1>
+            <p>Il capitale usato da Modulo E per il dimensionamento delle posizioni.</p>
+        </div>
+        <a class="back-link" href="index.php">← Dashboard</a>
+    </div>
+</header>
 
-        <?php if ($message): ?>
-            <p><strong><?= htmlspecialchars($message) ?></strong></p>
-        <?php endif; ?>
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-label">Capitale corrente</div>
+        <div class="stat-value"><?= $current !== null ? fmt_eur($current) : 'Non impostato' ?></div>
+    </div>
+</div>
 
-        <form method="POST">
-            <label>Nuovo capitale (€): <input type="text" name="capital_eur" required></label><br><br>
-            <label>Tipo:
-                <select name="change_type">
-                    <option value="manual_set">Impostazione manuale (es. inizio nuovo test)</option>
-                    <option value="deposit">Deposito</option>
-                    <option value="withdrawal">Prelievo</option>
-                </select>
-            </label><br><br>
-            <label>Nota (opzionale): <input type="text" name="note" placeholder="es. test capitale ridotto"></label><br><br>
-            <button type="submit">Aggiorna capitale</button>
-        </form>
-    </section>
+<?php render_nav('capital.php'); ?>
 
-    <section>
-        <h2>Storico modifiche</h2>
-        <table>
-            <thead>
-                <tr><th>Data</th><th>Capitale</th><th>Tipo</th><th>Nota</th></tr>
-            </thead>
-            <tbody>
-                <?php if (empty($history)): ?>
-                <tr><td colspan="4">Nessuno storico disponibile.</td></tr>
-                <?php endif; ?>
-                <?php foreach ($history as $h): ?>
-                <tr>
-                    <td><?= date('d/m/Y H:i', strtotime($h['created_at'])) ?></td>
-                    <td>€<?= number_format($h['capital_eur'], 2) ?></td>
-                    <td><?= htmlspecialchars($h['change_type']) ?></td>
-                    <td><?= htmlspecialchars($h['note'] ?? '') ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-    </section>
+<div class="wrap">
+
+<?php if ($message): ?>
+<div class="flash-msg<?= $message_error ? ' error' : '' ?>" style="margin-bottom:22px;"><?= e($message) ?></div>
+<?php endif; ?>
+
+<section>
+    <h2>Aggiorna capitale</h2>
+    <form method="POST" class="form-grid">
+        <div class="field"><label>Nuovo capitale (€)</label><input type="text" name="capital_eur" required></div>
+        <div class="field"><label>Tipo</label>
+            <select name="change_type">
+                <option value="manual_set">Impostazione manuale</option>
+                <option value="deposit">Deposito</option>
+                <option value="withdrawal">Prelievo</option>
+            </select>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;"><label>Nota (opzionale)</label><input type="text" name="note" placeholder="es. inizio nuovo test"></div>
+        <div><button type="submit">Aggiorna</button></div>
+    </form>
+</section>
+
+<section>
+    <div class="section-head"><h2>Storico modifiche</h2></div>
+    <div class="table-wrap">
+    <table>
+        <thead><tr><th>Data</th><th>Capitale</th><th>Tipo</th><th>Nota</th></tr></thead>
+        <tbody>
+        <?php if (empty($history)): ?><tr><td colspan="4" class="empty-state">Nessuno storico disponibile.</td></tr><?php endif; ?>
+        <?php foreach ($history as $h): ?>
+        <tr>
+            <td><?= e(date('d/m/Y H:i', strtotime($h['created_at']))) ?></td>
+            <td><?= fmt_eur($h['capital_eur']) ?></td>
+            <td><?= e($h['change_type']) ?></td>
+            <td class="muted"><?= e($h['note'] ?? '') ?></td>
+        </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+    </div>
+</section>
+
+</div>
+
+<footer>SAPTA · Capitale · Pagina generata <?= date('d/m/Y H:i') ?></footer>
 </body>
 </html>
