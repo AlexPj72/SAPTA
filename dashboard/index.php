@@ -58,7 +58,10 @@ $n_candidates_today = count($candidates);
             <h1>Dashboard operativa</h1>
             <p>Panoramica di segnali, candidati e capitale. Aggiornata ad ogni ricarica pagina.</p>
         </div>
-        <a class="back-link" href="decisions.php">📝 Vai al paper trading guidato →</a>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <a class="back-link" href="briefing.php">📋 Briefing di oggi</a>
+            <a class="back-link" href="decisions.php">📝 Paper trading guidato →</a>
+        </div>
     </div>
 </header>
 
