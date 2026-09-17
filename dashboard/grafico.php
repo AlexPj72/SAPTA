@@ -1,24 +1,25 @@
 <?php
 require_once 'config.php';
+require_once 'helpers.php';
 
 $ticker = $_GET['ticker'] ?? '';
 if ($ticker === '') {
     die('Ticker mancante. <a href="index.php">Torna alla dashboard</a>');
 }
 
-// Storico giornaliero (ultimi 90gg) - Modulo A
+// Storico giornaliero (ultimi 120gg)
 $daily = supabase_query('prezzi', [
-    'select' => 'timestamp,close',
+    'select' => 'timestamp,close,volume',
     'ticker' => 'eq.' . $ticker,
     'interval' => 'eq.1d',
     'order' => 'timestamp.desc',
-    'limit' => 90
+    'limit' => 120
 ]);
-$daily = array_reverse($daily); // ordine cronologico per il grafico
+$daily = array_reverse($daily);
 
 // Intraday 15m (ultime 100 barre)
 $intraday = supabase_query('prezzi', [
-    'select' => 'timestamp,close',
+    'select' => 'timestamp,close,volume',
     'ticker' => 'eq.' . $ticker,
     'interval' => 'eq.15m',
     'order' => 'timestamp.desc',
@@ -26,17 +27,33 @@ $intraday = supabase_query('prezzi', [
 ]);
 $intraday = array_reverse($intraday);
 
-// Ultimo segnale filtrato per questo ticker, per le linee target/invalidation
-$last_signal = supabase_query('signals_filtered', [
-    'select' => 'target_price,invalidation_price,filtered_action,timestamp',
+// Ultimo segnale filtrato per questo ticker + il candidato H2 collegato, per la spiegazione
+$last_signal_rows = supabase_query('signals_filtered', [
+    'select' => '*',
     'ticker' => 'eq.' . $ticker,
     'order' => 'timestamp.desc',
     'limit' => 1
 ]);
-$target_price = $last_signal[0]['target_price'] ?? null;
-$invalidation_price = $last_signal[0]['invalidation_price'] ?? null;
+$last_signal = $last_signal_rows[0] ?? null;
+$last_candidate = null;
+if ($last_signal && !empty($last_signal['screening_candidate_id'])) {
+    $rows = supabase_query('screening_candidates', [
+        'select' => '*', 'id' => 'eq.' . $last_signal['screening_candidate_id'], 'limit' => 1
+    ]);
+    $last_candidate = $rows[0] ?? null;
+}
+$target_price = $last_signal['target_price'] ?? null;
+$invalidation_price = $last_signal['invalidation_price'] ?? null;
 
-$daily_labels = array_map(fn($d) => date('d/m', strtotime($d['timestamp'])), $daily);
+// Statistiche rapide
+$last_close = !empty($daily) ? (float) end($daily)['close'] : null;
+$prev_close = count($daily) > 1 ? (float) $daily[count($daily) - 2]['close'] : null;
+$change_pct = ($last_close !== null && $prev_close) ? (($last_close / $prev_close - 1) * 100) : null;
+$closes_120 = array_map(fn($d) => (float) $d['close'], $daily);
+$min_120 = $closes_120 ? min($closes_120) : null;
+$max_120 = $closes_120 ? max($closes_120) : null;
+
+$daily_labels = array_map(fn($d) => date('d/m/y', strtotime($d['timestamp'])), $daily);
 $daily_values = array_map(fn($d) => (float) $d['close'], $daily);
 $intraday_labels = array_map(fn($d) => date('d/m H:i', strtotime($d['timestamp'])), $intraday);
 $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
@@ -46,75 +63,184 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SAPTA — Grafico <?= htmlspecialchars($ticker) ?></title>
+    <title>SAPTA — <?= e($ticker) ?></title>
     <link rel="stylesheet" href="assets/style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 </head>
 <body>
-    <header>
-        <h1>SAPTA — <?= htmlspecialchars($ticker) ?></h1>
-        <p><a href="index.php" style="color:#fff;">&larr; torna alla dashboard</a></p>
-        <?php if ($target_price || $invalidation_price): ?>
-        <p>
-            <?php if ($target_price): ?>🎯 Target: €<?= number_format($target_price, 2) ?> &nbsp; <?php endif; ?>
-            <?php if ($invalidation_price): ?>🛑 Invalidation: €<?= number_format($invalidation_price, 2) ?><?php endif; ?>
-        </p>
-        <?php endif; ?>
-    </header>
 
-    <section>
-        <h2>Storico giornaliero (ultimi 90gg)</h2>
-        <?php if (empty($daily)): ?>
-            <p>Nessuno storico giornaliero disponibile per questo ticker.</p>
-        <?php else: ?>
-            <canvas id="dailyChart" height="90"></canvas>
-        <?php endif; ?>
-    </section>
+<header class="hero compact">
+    <div class="hero-top">
+        <div>
+            <div class="eyebrow">SAPTA v5.1.1</div>
+            <h1><?= e($ticker) ?><?php if ($change_pct !== null): ?>
+                <span style="font-size:16px; font-weight:700; opacity:.9;">
+                    <?= $change_pct >= 0 ? '▲' : '▼' ?> <?= number_format(abs($change_pct), 2) ?>%
+                </span>
+            <?php endif; ?></h1>
+            <p><?= $last_close !== null ? 'Ultimo close: ' . fmt_eur($last_close) : 'Nessuno storico disponibile' ?></p>
+        </div>
+        <a class="back-link" href="index.php">← Dashboard</a>
+    </div>
+</header>
 
-    <section>
-        <h2>Intraday 15 minuti (ultime 100 barre)</h2>
-        <?php if (empty($intraday)): ?>
-            <p>Nessun dato intraday disponibile per questo ticker.</p>
-        <?php else: ?>
-            <canvas id="intradayChart" height="90"></canvas>
-        <?php endif; ?>
-    </section>
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-label">Ultimo close</div>
+        <div class="stat-value"><?= fmt_eur($last_close) ?></div>
+    </div>
+    <div class="stat-card <?= ($change_pct ?? 0) >= 0 ? 'good' : 'bad' ?>">
+        <div class="stat-label">Variazione gg.</div>
+        <div class="stat-value"><?= $change_pct !== null ? (($change_pct >= 0 ? '+' : '') . number_format($change_pct, 2) . '%') : '—' ?></div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Min / Max 120gg</div>
+        <div class="stat-value" style="font-size:16px;"><?= $min_120 !== null ? fmt_eur($min_120, 1) . ' – ' . fmt_eur($max_120, 1) : '—' ?></div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Ultimo segnale</div>
+        <div class="stat-value" style="font-size:16px;"><?= $last_signal ? badge_azione($last_signal['filtered_action'] ?? 'HOLD') : '—' ?></div>
+    </div>
+</div>
 
-    <script>
-        const dailyLabels = <?= json_encode($daily_labels) ?>;
-        const dailyValues = <?= json_encode($daily_values) ?>;
-        const intradayLabels = <?= json_encode($intraday_labels) ?>;
-        const intradayValues = <?= json_encode($intraday_values) ?>;
-        const targetPrice = <?= $target_price !== null ? json_encode((float) $target_price) : 'null' ?>;
-        const invalidationPrice = <?= $invalidation_price !== null ? json_encode((float) $invalidation_price) : 'null' ?>;
+<?php render_nav(''); ?>
 
-        function buildLineDataset(label, values, color) {
-            return { label, data: values, borderColor: color, tension: 0.1, pointRadius: 0 };
+<div class="wrap">
+
+<?php if ($last_signal): ?>
+<section>
+    <h2>Perché questo segnale</h2>
+    <div class="explain" style="max-width:none;"><?= spiega_segnale($last_signal, $last_candidate) ?></div>
+</section>
+<?php endif; ?>
+
+<section class="chart-card">
+    <div class="section-head">
+        <div><h2>Storico giornaliero</h2><p class="muted">Ultimi <?= count($daily) ?> giorni di trading</p></div>
+    </div>
+    <?php if (empty($daily)): ?>
+        <p class="muted">Nessuno storico giornaliero disponibile per questo ticker.</p>
+    <?php else: ?>
+        <canvas id="dailyChart" height="100"></canvas>
+        <div class="chart-legend-row">
+            <span><i style="background:#4f46e5"></i> Prezzo di chiusura</span>
+            <?php if ($target_price): ?><span><i style="background:#16a34a"></i> Target €<?= number_format($target_price, 2) ?></span><?php endif; ?>
+            <?php if ($invalidation_price): ?><span><i style="background:#dc2626"></i> Invalidazione €<?= number_format($invalidation_price, 2) ?></span><?php endif; ?>
+        </div>
+    <?php endif; ?>
+</section>
+
+<section class="chart-card">
+    <div class="section-head">
+        <div><h2>Intraday 15 minuti</h2><p class="muted">Ultime <?= count($intraday) ?> barre</p></div>
+    </div>
+    <?php if (empty($intraday)): ?>
+        <p class="muted">Nessun dato intraday disponibile per questo ticker.</p>
+    <?php else: ?>
+        <canvas id="intradayChart" height="100"></canvas>
+        <div class="chart-legend-row">
+            <span><i style="background:#7c3aed"></i> Prezzo di chiusura (15m)</span>
+        </div>
+    <?php endif; ?>
+</section>
+
+</div>
+
+<script>
+const dailyLabels = <?= json_encode($daily_labels) ?>;
+const dailyValues = <?= json_encode($daily_values) ?>;
+const intradayLabels = <?= json_encode($intraday_labels) ?>;
+const intradayValues = <?= json_encode($intraday_values) ?>;
+const targetPrice = <?= $target_price !== null ? json_encode((float) $target_price) : 'null' ?>;
+const invalidationPrice = <?= $invalidation_price !== null ? json_encode((float) $invalidation_price) : 'null' ?>;
+
+Chart.defaults.font.family = "'Inter', sans-serif";
+Chart.defaults.color = '#6b7280';
+
+function eurTick(value) { return '€' + value.toLocaleString('it-IT', {maximumFractionDigits: 0}); }
+
+// Mostra al massimo ~10 etichette sull'asse X per non affollarlo
+function sparseTicks(labels) {
+    const step = Math.max(1, Math.ceil(labels.length / 10));
+    return { callback: (val, idx) => (idx % step === 0 ? labels[idx] : '') };
+}
+
+function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel, target, invalidation) {
+    const el = document.getElementById(canvasId);
+    if (!el || !values.length) return;
+
+    const datasets = [{
+        label: seriesLabel,
+        data: values,
+        borderColor: lineColor,
+        backgroundColor: fillColor,
+        fill: true,
+        tension: 0.25,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: lineColor,
+        borderWidth: 2.5,
+    }];
+
+    if (target !== null) {
+        datasets.push({
+            label: 'Target',
+            data: labels.map(() => target),
+            borderColor: '#16a34a',
+            borderDash: [6, 4],
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: false,
+        });
+    }
+    if (invalidation !== null) {
+        datasets.push({
+            label: 'Invalidazione',
+            data: labels.map(() => invalidation),
+            borderColor: '#dc2626',
+            borderDash: [6, 4],
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: false,
+        });
+    }
+
+    new Chart(el, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#1c2333',
+                    padding: 10,
+                    titleFont: { weight: '700' },
+                    callbacks: {
+                        label: (ctx) => ctx.dataset.label + ': €' + ctx.parsed.y.toLocaleString('it-IT', {minimumFractionDigits: 2, maximumFractionDigits: 2})
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: sparseTicks(labels),
+                },
+                y: {
+                    grid: { color: '#eef0f5' },
+                    ticks: { callback: eurTick },
+                    title: { display: true, text: 'Prezzo (EUR/USD)' },
+                }
+            }
         }
+    });
+}
 
-        function addHorizontalLine(labels, value, label, color) {
-            return { label, data: labels.map(() => value), borderColor: color, borderDash: [6, 4], pointRadius: 0 };
-        }
+buildChart('dailyChart', dailyLabels, dailyValues, '#4f46e5', 'rgba(79,70,229,0.08)', 'Prezzo close', targetPrice, invalidationPrice);
+buildChart('intradayChart', intradayLabels, intradayValues, '#7c3aed', 'rgba(124,58,237,0.08)', 'Prezzo close (15m)', null, null);
+</script>
 
-        if (dailyValues.length) {
-            const datasets = [buildLineDataset('Prezzo close', dailyValues, '#2563eb')];
-            if (targetPrice !== null) datasets.push(addHorizontalLine(dailyLabels, targetPrice, 'Target', '#16a34a'));
-            if (invalidationPrice !== null) datasets.push(addHorizontalLine(dailyLabels, invalidationPrice, 'Invalidation', '#dc2626'));
-            new Chart(document.getElementById('dailyChart'), {
-                type: 'line',
-                data: { labels: dailyLabels, datasets },
-            });
-        }
-
-        if (intradayValues.length) {
-            const datasets = [buildLineDataset('Prezzo close (15m)', intradayValues, '#7c3aed')];
-            if (targetPrice !== null) datasets.push(addHorizontalLine(intradayLabels, targetPrice, 'Target', '#16a34a'));
-            if (invalidationPrice !== null) datasets.push(addHorizontalLine(intradayLabels, invalidationPrice, 'Invalidation', '#dc2626'));
-            new Chart(document.getElementById('intradayChart'), {
-                type: 'line',
-                data: { labels: intradayLabels, datasets },
-            });
-        }
-    </script>
+<footer>SAPTA · <?= e($ticker) ?> · Pagina generata <?= date('d/m/Y H:i') ?></footer>
 </body>
 </html>
