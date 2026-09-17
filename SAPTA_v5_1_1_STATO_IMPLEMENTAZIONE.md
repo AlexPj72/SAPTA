@@ -145,6 +145,29 @@ Inoltre, in questa sessione:
   Decisione di passare all'automatico da trattare come conversazione
   dedicata separata, non come punto di lista.
 
+## 0ter. Novità sessione 16/09 (riepilogo)
+
+- **Diagnosi H1 chiarita**: dopo un doppio controllo (la prima analisi era
+  viziata da un filtro qualità-dato non presente nell'algoritmo reale), **H1
+  funziona correttamente**. Al momento del controllo nessun ticker soddisfa
+  contemporaneamente `volume_ratio≥3.0` e `price_change≥1.5%`; il quasi-caso
+  più vicino (STLAM.MI, -5.01% con volume 3.49x) viene correttamente escluso
+  perché la sua ultima barra ha `data_quality_flag='stale'` (mercato di
+  Milano già chiuso). `screening_candidates` a zero righe non è quindi un bug,
+  solo la conseguenza di soglie che raramente scattano insieme + storico
+  intraday ancora corto (8-13 barre/ticker).
+- **Rischio di Portafoglio (Sezione 15) e Ranking finale (Sezione 16):
+  implementati.** Vedi sezioni 6 e 7 sotto, ora aggiornate da ⬜ a ✅.
+- **Dashboard PHP: riscritta completamente (v2).** Nuovo tema chiaro
+  coerente su tutte le pagine (prima `universo.php` usava classi CSS
+  assenti dal vecchio `style.css` — dashboard incoerente), grafici Chart.js
+  con assi/tooltip/area leggibili (prima linee sottili senza indicazioni),
+  guida passo-passo al paper trading in `decisions.php`, e nuova funzione
+  `spiega_segnale()` (in `helpers.php`) che traduce i punteggi in una
+  spiegazione testuale italiana per ogni segnale — risposta alla richiesta
+  di "alert spiegati". File committati anche nel repo (cartella
+  `dashboard/`, che prima era solo su Aruba senza backup — vedi sezione 9).
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
@@ -207,15 +230,15 @@ Inoltre, in questa sessione:
 
 | Elemento | Stato | Note |
 |---|---|---|
-| Concentrazione settoriale tra candidati sopravvissuti a E | ⬜ | |
-| Correlazione approssimata (settore/mercato) | ⬜ | |
-| Esposizione totale stimata | ⬜ | |
+| Concentrazione settoriale tra candidati sopravvissuti a E | ✅ | Esisteva già (v5.1.1, `check_sector_concentration`, max 2 posizioni/settore su 10gg) — soddisfa anche la correlazione approssimata, come permesso esplicitamente dalla spec |
+| Correlazione approssimata (settore/mercato) | ✅ | Vedi sopra: coperta dalla stessa funzione, non serve un modello a parte in questa fase |
+| Esposizione totale stimata | ✅ | **[NUOVO 16/09]** `check_portfolio_exposure()` in `modulo_e_cost_filter.py`: somma le posizioni BUY approvate + la nuova candidata, declassa a HOLD oltre il 60% del capitale (`MAX_PORTFOLIO_EXPOSURE_PERCENT`, placeholder non calibrato). Nuove colonne `signals_filtered.sector_concentration_count` e `.portfolio_exposure_pct` |
 
 ## 7. Ranking finale (Sezione 16)
 
 | Elemento | Stato | Note |
 |---|---|---|
-| Formula combinata | ⬜ | Non iniziato — dipende da punti 4-6 |
+| Formula combinata | ✅ | **[NUOVO 16/09]** `compute_final_rank_score()` in `modulo_e_cost_filter.py`: score 0-100 da anomaly_score + context_score + confidence_multiplier + rendimento netto + qualità dato - penalità di rischio. Pesi in `scoring_weights_v1.json` v3 (`ranking_weights`) — **PLACEHOLDER non calibrati**, stesso principio di `context_weights`: da validare col backtest walk-forward prima di dare peso operativo al ranking. Nuova colonna `signals_filtered.final_rank_score`. **Non ancora testato con un segnale reale** — serve un BUY/SELL vero da Modulo B (fermo dall'11/09) |
 
 ## 8. Storico e Backtest (Sezioni 21-22)
 
@@ -223,8 +246,8 @@ Inoltre, in questa sessione:
 |---|---|---|
 | Storico base 2 anni, tutto l'universo | ✅ | **Fatto in questa sessione**: 134/135 ticker, 67.278 righe, copertura 2024-09-11 → oggi. Manca solo `BPSO.MI` (stesso ticker già noto senza sector/industry via yfinance — limitazione nota, non bloccante) |
 | Storico esteso 5-6 anni, 15-20 ticker per stress test | ✅ | **Fatto in questa sessione**: 18 ticker (mix LIQ_HIGH/MEDIUM/LOW, settori diversi, incluso l'unico LIQ_LOW disponibile `AVIO.MI`), storico dal 2019-06-03 — copre sia marzo 2020 sia il bear market 2022. Script: `src/load_historical_data.py`, workflow one-off `load_historical.yml` |
-| Backtest walk-forward | ⬜ | Non iniziato — dipende da Rischio di Portafoglio (punto 6) e Ranking (punto 7), non ancora scritti |
-| Stress test marzo 2020 / bear 2022 | ⬜ | Dati ora disponibili (vedi sopra), ma il backtest stesso non è ancora scritto |
+| Backtest walk-forward | ✅ | **Completato 15/09** (vedi sezione 0bis e `BACKTEST_WALKFORWARD_REPORT.md`): 734 finestre/6 mesi su 134 ticker, rendimento medio +4.69%/finestra, Sharpe 0.56, win rate 94.4% — ma 60.8% delle finestre senza alcun trade e solo canale rule-based testato (non XGBoost/IA). Campione ancora piccolo, non validante da solo per il ranking (punto 7) |
+| Stress test marzo 2020 / bear 2022 | ⬜ | Dati disponibili dal 13/09, backtest dedicato su questi periodi non ancora eseguito separatamente |
 
 ## 9. Dashboard PHP (Aruba)
 
@@ -234,8 +257,9 @@ Inoltre, in questa sessione:
 | `index.php`, `config.php`, `signals.php`, `anomalies.php`, `capital.php`, `assets/style.css` | ✅ | Creati e pubblicati su `https://lnx.pujia.it/SAPTA/` (nota maiuscole, vedi sezione 0). Verificati funzionanti: leggono segnali, capitale, candidati da Supabase |
 | `anomalies.php` aggiornata per leggere `screening_candidates` invece della vecchia tabella `anomalies` | ✅ | Fatto contestualmente alla creazione (non serviva più un fix separato, la tabella legacy non viene nemmeno referenziata nel nuovo codice) |
 | `capital.php` — gestione capitale con storico | ✅ | Form di aggiornamento + tabella storico, scrive su `capital_state` via anon key (stesso pattern di sicurezza già accettato per `human_decisions`: anon key resta lato server PHP) |
-| Badge fuorviante "HOLD → APPROVATO" in `index.php` | ✅ | **Fix in questa sessione**: badge "APPROVATO/DECLASSATO" ora compare solo per BUY/SELL; HOLD genuino mostra "— nessuna azione" (badge grigio neutro) |
-| File PHP NON sono nel repo GitHub | ⚠️ | Vivono solo su Aruba, gestiti manualmente via File Manager. Se si perde la copia locale/output di una sessione, non c'è backup automatico — valutare se aggiungerli al repo (es. cartella `dashboard/`) in una sessione futura, anche solo come backup, senza per questo servirli da lì |
+| Badge fuorviante "HOLD → APPROVATO" in `index.php` | ✅ | Fix sessione 13/09: badge "APPROVATO/DECLASSATO" compare solo per BUY/SELL; HOLD genuino mostra "— nessuna azione" |
+| **[NUOVO 16/09] Restyling completo v2** | ✅ | Tema chiaro unico e coerente (Inter, card, badge, KPI), `grafico.php` riscritto con Chart.js leggibile (assi €, gridline, tooltip, area fill, target/stop annotati), `decisions.php` trasformato in guida passo-passo al paper trading, nuovo `helpers.php` condiviso con `spiega_segnale()` (spiegazione testuale di ogni segnale — confidenza, contesto/GDELT, news, rischio di portafoglio). Testato in locale con dati finti (php -l + server PHP, dati pieni e vuoti): nessun errore |
+| File PHP nel repo GitHub | ✅ | **Risolto 16/09**: cartella `dashboard/` nel repo ora allineata alla versione v2 deployata su Aruba (backup automatico via commit, non serve più gestire solo da File Manager). Il deploy resta comunque manuale: caricare i file su Aruba dopo ogni commit, non c'è ancora un deploy automatico dal repo |
 
 ## 11. Pezzi mancanti/persi da recuperare (decisione sessione 13/09)
 
@@ -277,11 +301,12 @@ Vedi `SAPTA_v5_1_1_Corretto.md` Sezione 28 per il testo completo:
 
 ---
 
-## Prossima azione consigliata (ordine)
+## Prossima azione consigliata (ordine) — aggiornato 16/09
 
-1. **Lunedì 14/09, mercato aperto**: verificare che H1/H2 popolino davvero `screening_candidates` sui ~150 ticker (finora testato solo a mercato chiuso, con 0 righe attese)
-2. Osservare la dashboard (`https://lnx.pujia.it/SAPTA/`) durante il primo run reale per un controllo visivo immediato, oltre alle query Supabase dirette
-3. Misurare la durata reale del job "slow" con H2/RSS incluso (alert 3, §28) nelle prime esecuzioni
-4. Decidere il capitale operativo per l'avvio del paper trading (oggi placeholder €1.000 in `capital_state`) — non bloccante per i test H1/H2, ma da fissare prima della Fase 7
-5. Dopo aver confermato H1/H2/B stabili con dati reali: passare al Rischio di Portafoglio (Sezione 15, punto 6 di questo documento), poi al Ranking finale (punto 7)
-6. **Storico daily completato** (punto 8) — una volta pronti Rischio di Portafoglio e Ranking, si può passare al backtest walk-forward (Sezione 22), inclusi gli stress test su marzo 2020/bear 2022
+1. **Continuare a monitorare H1/H2** con mercato aperto: nessuna promozione a `screening_candidates` è ancora avvenuta in condizioni reali (confermato non essere un bug, vedi sezione 0ter) — non richiede intervento, solo tempo/osservazione
+2. **Caricare la nuova dashboard v2 su Aruba** (file già committati in `dashboard/` nel repo, sezione 9) — sostituire l'intera cartella `sapta/` esistente, cancellare a mano `test_esecuzione.php` se ancora presente
+3. **Testare Sezione 15/16 con un segnale reale** appena Modulo B produce un BUY/SELL vero (fermo dall'11/09) — verificare che `sector_concentration_count`, `portfolio_exposure_pct` e `final_rank_score` si popolino come atteso
+4. Decidere il capitale operativo per l'avvio del paper trading (oggi placeholder €1.000 in `capital_state`)
+5. Calibrare i pesi placeholder (`context_weights`, `ranking_weights`, soglie liquidità) col backtest walk-forward — già disponibile (sezione 8), ma finora testato solo sul canale rule-based: da ripetere includendo il nuovo ranking (punto 7) una volta che ci sono segnali reali da valutare
+6. Stress test dedicati su marzo 2020 / bear 2022 (dati disponibili dal 13/09, backtest specifico ancora da lanciare)
+7. Avviare in parallelo la pratica di apertura conto IBKR (paper trading) — non blocca i punti sopra, ma la verifica identità richiede tempo (vedi `chatgpt_implementazione.md`)
