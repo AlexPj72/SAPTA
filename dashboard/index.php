@@ -1,126 +1,192 @@
 <?php
 require_once 'config.php';
+require_once 'helpers.php';
 
-// Ultimi segnali filtrati (Modulo E)
+// Ultimi segnali filtrati (Modulo E) — include ora Sezione 15/16 (rischio + ranking)
 $signals = supabase_query('signals_filtered', [
     'select' => '*',
     'order' => 'timestamp.desc',
-    'limit' => 20
+    'limit' => 25
 ]);
 
-// Candidati screening recenti (Modulo H v5.1.1 — sostituisce la vecchia tabella "anomalies")
+// Candidati screening recenti (Modulo H v5.1.1)
 $candidates = supabase_query('screening_candidates', [
     'select' => '*',
     'order' => 'timestamp.desc',
     'limit' => 15
 ]);
+// Mappa per id, per collegare i segnali ai punteggi H2 originali (spiegazione)
+$candidates_by_id = [];
+foreach ($candidates as $c) { $candidates_by_id[$c['id']] = $c; }
+// Se un segnale in tabella referenzia un candidato non tra gli ultimi 15, lo recuperiamo a parte
+$missing_ids = [];
+foreach ($signals as $s) {
+    $cid = $s['screening_candidate_id'] ?? null;
+}
 
-// Capitale corrente (tabella capital_state)
+// Capitale corrente
 $capital_history = supabase_query('capital_state', [
     'select' => 'capital_eur,created_at',
     'order' => 'created_at.desc',
     'limit' => 1
 ]);
 $current_capital = $capital_history[0]['capital_eur'] ?? null;
+
+// KPI
+$n_buy_sell = 0; $max_exposure = 0.0; $last_ts = null;
+foreach ($signals as $s) {
+    if (($s['filtered_action'] ?? 'HOLD') !== 'HOLD' && !empty($s['filter_passed'])) $n_buy_sell++;
+    if (isset($s['portfolio_exposure_pct'])) $max_exposure = max($max_exposure, (float) $s['portfolio_exposure_pct']);
+    if (!$last_ts && isset($s['timestamp'])) $last_ts = $s['timestamp'];
+}
+$n_candidates_today = count($candidates);
 ?>
 <!DOCTYPE html>
 <html lang="it">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SAPTA Dashboard</title>
+    <title>SAPTA — Dashboard</title>
     <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
-    <header>
-        <h1>SAPTA v5.1.1 — Dashboard [[TEST-MARKER-OK-<?= date('His') ?>]]</h1>
-        <p>
-            Capitale corrente:
-            <strong><?= $current_capital !== null ? '€' . number_format($current_capital, 2) : 'Non impostato' ?></strong>
-            — <a href="capital.php" style="color:#fff;">gestisci capitale</a>
-            — <a href="decisions.php" style="color:#fff;">decisioni (paper trading)</a>
-            — <a href="universo.php" style="color:#fff;">universo</a>
-        </p>
-        <p>Ultimo aggiornamento pagina: <?= date('d/m/Y H:i') ?></p>
-    </header>
 
-    <section>
-        <h2>Segnali Filtrati (ultimi 20)</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Timestamp</th>
-                    <th>Ticker</th>
-                    <th>Azione Originale</th>
-                    <th>Azione Filtrata</th>
-                    <th>Rendimento Netto Atteso</th>
-                    <th>Target / Invalidation</th>
-                    <th>Stato</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php if (empty($signals)): ?>
-                <tr><td colspan="6">Nessun segnale disponibile.</td></tr>
-                <?php endif; ?>
-                <?php foreach ($signals as $s): ?>
-                <tr>
-                    <td><?= date('d/m H:i', strtotime($s['timestamp'])) ?></td>
-                    <td><strong><a href="grafico.php?ticker=<?= urlencode($s['ticker']) ?>"><?= htmlspecialchars($s['ticker']) ?></a></strong></td>
-                    <td><?= htmlspecialchars($s['original_action']) ?></td>
-                    <td class="<?= $s['filtered_action'] === 'HOLD' ? 'declassato' : '' ?>">
-                        <?= htmlspecialchars($s['filtered_action']) ?>
-                    </td>
-                    <td><?= number_format(($s['expected_net_return'] ?? 0) * 100, 2) ?>%</td>
-                    <td>
-                        <?= isset($s['target_price']) ? '🎯 €' . number_format($s['target_price'], 2) : '—' ?><br>
-                        <?= isset($s['invalidation_price']) ? '🛑 €' . number_format($s['invalidation_price'], 2) : '—' ?>
-                    </td>
-                    <td>
-                        <?php if ($s['filtered_action'] === 'HOLD' && $s['original_action'] === 'HOLD'): ?>
-                            <span class="badge hold">— nessuna azione</span>
-                        <?php elseif (!empty($s['filter_passed'])): ?>
-                            <span class="badge approved">✅ APPROVATO</span>
-                            <br><a href="decisions.php?ticker=<?= urlencode($s['ticker']) ?>&signal_id=<?= (int) $s['id'] ?>">registra decisione</a>
-                        <?php else: ?>
-                            <span class="badge rejected">❌ DECLASSATO</span>
-                            <br><small><?= htmlspecialchars($s['filter_reason'] ?? '') ?></small>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-    </section>
+<header class="hero">
+    <div class="hero-top">
+        <div>
+            <div class="eyebrow">SAPTA v5.1.1</div>
+            <h1>Dashboard operativa</h1>
+            <p>Panoramica di segnali, candidati e capitale. Aggiornata ad ogni ricarica pagina.</p>
+        </div>
+        <a class="back-link" href="decisions.php">📝 Vai al paper trading guidato →</a>
+    </div>
+</header>
 
-    <section>
-        <h2>Candidati Screening (Modulo H, ultimi 15)</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Timestamp</th>
-                    <th>Ticker</th>
-                    <th>Status</th>
-                    <th>Fascia Liquidità</th>
-                    <th>News (livello 1)</th>
-                    <th>Context Score</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php if (empty($candidates)): ?>
-                <tr><td colspan="6">Nessun candidato disponibile (normale a mercato chiuso).</td></tr>
-                <?php endif; ?>
-                <?php foreach ($candidates as $c): ?>
-                <tr>
-                    <td><?= date('d/m H:i', strtotime($c['timestamp'])) ?></td>
-                    <td><strong><?= htmlspecialchars($c['ticker']) ?></strong></td>
-                    <td><?= htmlspecialchars($c['status'] ?? '') ?></td>
-                    <td><?= htmlspecialchars($c['liquidity_bucket'] ?? '') ?></td>
-                    <td><?= isset($c['news_light_count']) ? (int)$c['news_light_count'] : '—' ?></td>
-                    <td><?= isset($c['context_score']) ? number_format($c['context_score'], 2) : '—' ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-    </section>
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-label">Capitale corrente</div>
+        <div class="stat-value"><?= $current_capital !== null ? fmt_eur($current_capital) : '—' ?></div>
+        <div class="stat-sub"><a href="capital.php">gestisci →</a></div>
+    </div>
+    <div class="stat-card <?= $n_buy_sell > 0 ? 'good' : '' ?>">
+        <div class="stat-label">Opportunità attive</div>
+        <div class="stat-value"><?= $n_buy_sell ?></div>
+        <div class="stat-sub">BUY/SELL approvati (ultimi 25 segnali)</div>
+    </div>
+    <div class="stat-card <?= $max_exposure > 0.5 ? 'warn' : '' ?>">
+        <div class="stat-label">Esposizione stimata</div>
+        <div class="stat-value"><?= $max_exposure > 0 ? number_format($max_exposure * 100, 0) . '%' : '—' ?></div>
+        <div class="stat-sub">del capitale, se eseguite insieme</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Candidati screening</div>
+        <div class="stat-value"><?= $n_candidates_today ?></div>
+        <div class="stat-sub"><a href="anomalies.php">vedi radar →</a></div>
+    </div>
+</div>
+
+<?php render_nav('index.php'); ?>
+
+<div class="wrap">
+
+<section>
+    <div class="section-head">
+        <div>
+            <h2>Segnali filtrati (ultimi 25)</h2>
+            <p class="muted">Output di Modulo E — rendimento netto, rischio di portafoglio e score di ranking già applicati.</p>
+        </div>
+    </div>
+    <div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Quando</th>
+                <th>Ticker</th>
+                <th>Azione</th>
+                <th>Score</th>
+                <th>Rend. netto</th>
+                <th>Target / Stop</th>
+                <th>Stato</th>
+                <th>Spiegazione</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php if (empty($signals)): ?>
+            <tr><td colspan="8" class="empty-state">Nessun segnale disponibile al momento.</td></tr>
+            <?php endif; ?>
+            <?php foreach ($signals as $s): ?>
+            <?php $cand = $candidates_by_id[$s['screening_candidate_id'] ?? null] ?? null; ?>
+            <tr>
+                <td><?= e(date('d/m H:i', strtotime($s['timestamp']))) ?></td>
+                <td><a class="ticker-link" href="grafico.php?ticker=<?= urlencode($s['ticker']) ?>"><?= e($s['ticker']) ?></a></td>
+                <td><?= badge_azione($s['filtered_action'] ?? 'HOLD') ?></td>
+                <td><?= rank_pill($s['final_rank_score'] ?? null) ?></td>
+                <td class="<?= (($s['expected_net_return'] ?? 0) >= 0) ? 'positive' : 'negative' ?>">
+                    <?= fmt_pct($s['expected_net_return'] ?? null) ?>
+                </td>
+                <td>
+                    <?= isset($s['target_price']) ? '🎯 ' . fmt_eur($s['target_price']) : '—' ?><br>
+                    <?= isset($s['invalidation_price']) ? '🛑 ' . fmt_eur($s['invalidation_price']) : '' ?>
+                </td>
+                <td>
+                    <?php if (($s['filtered_action'] ?? 'HOLD') === 'HOLD' && ($s['original_action'] ?? '') === 'HOLD'): ?>
+                        <span class="badge hold">nessuna azione</span>
+                    <?php elseif (!empty($s['filter_passed'])): ?>
+                        <span class="badge approved">✅ approvato</span>
+                        <br><a class="mini-button" href="decisions.php?ticker=<?= urlencode($s['ticker']) ?>&signal_id=<?= (int) $s['id'] ?>">registra →</a>
+                    <?php else: ?>
+                        <span class="badge rejected">❌ declassato</span>
+                    <?php endif; ?>
+                </td>
+                <td>
+                    <details>
+                        <summary class="explain-toggle">perché?</summary>
+                        <div class="explain"><?= spiega_segnale($s, $cand) ?></div>
+                    </details>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+    </div>
+</section>
+
+<section>
+    <div class="section-head">
+        <div>
+            <h2>Candidati screening (Modulo H, ultimi 15)</h2>
+            <p class="muted">Anomalie rilevate da H1/H2, prima ancora di arrivare all'analisi di Modulo B.</p>
+        </div>
+        <a class="mini-button" href="anomalies.php">vedi tutto il radar →</a>
+    </div>
+    <div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Quando</th><th>Ticker</th><th>Stato</th><th>Liquidità</th><th>News</th><th>Contesto</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php if (empty($candidates)): ?>
+            <tr><td colspan="6" class="empty-state">Nessun candidato al momento — normale a mercato chiuso o con storico intraday ancora scarso.</td></tr>
+            <?php endif; ?>
+            <?php foreach ($candidates as $c): ?>
+            <tr>
+                <td><?= e(date('d/m H:i', strtotime($c['timestamp']))) ?></td>
+                <td><a class="ticker-link" href="grafico.php?ticker=<?= urlencode($c['ticker']) ?>"><?= e($c['ticker']) ?></a></td>
+                <td><?= e($c['status'] ?? '') ?></td>
+                <td><?= e($c['liquidity_bucket'] ?? '—') ?></td>
+                <td><?= isset($c['news_light_count']) ? (int) $c['news_light_count'] : '—' ?></td>
+                <td><?= isset($c['context_score']) ? number_format($c['context_score'], 2) : '—' ?></td>
+            </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+    </div>
+</section>
+
+</div>
+
+<footer>SAPTA · Pagina generata <?= date('d/m/Y H:i') ?></footer>
 </body>
 </html>
