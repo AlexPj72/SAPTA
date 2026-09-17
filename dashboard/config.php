@@ -24,4 +24,27 @@ function supabase_query($table, $params = []) {
     $data = json_decode($response, true);
     return is_array($data) ? $data : [];
 }
-?>
+
+// POST/PATCH helper (usato da decisions.php e capital.php) - accorpa il
+// codice curl duplicato che c'era in entrambi i file.
+function supabase_write($table, $payload, $method = 'POST', $filter = '') {
+    $url = SUPABASE_URL . '/rest/v1/' . $table . $filter;
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    if ($method === 'PATCH') {
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PATCH');
+    } else {
+        curl_setopt($ch, CURLOPT_POST, true);
+    }
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'apikey: ' . SUPABASE_ANON_KEY,
+        'Authorization: Bearer ' . SUPABASE_ANON_KEY,
+        'Content-Type: application/json',
+        'Prefer: return=minimal'
+    ]);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    return $http_code;
+}
