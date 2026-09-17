@@ -24,10 +24,12 @@ function fmt_pct($v, $dec = 2) {
 function render_nav($active) {
     $items = [
         'index.php'     => 'Dashboard',
+        'briefing.php'  => 'Briefing',
         'universo.php'  => 'Universo',
         'anomalies.php' => 'Radar anomalie',
         'signals.php'   => 'Segnali grezzi',
         'decisions.php' => 'Paper trading',
+        'chat.php'      => 'Chat AI',
         'capital.php'   => 'Capitale',
     ];
     echo '<nav class="nav-bar">';
@@ -150,4 +152,69 @@ function spiega_segnale($signal, $candidate = null) {
     }
 
     return implode(' ', $parti);
+}
+
+/**
+ * [NUOVO 17/09] Chiamata a Gemini per la Chat AI, stesso modello/auth del
+ * Modulo I Python (header x-goog-api-key, gemini-3.1-flash-lite).
+ * $history: array di ['role' => 'user'|'model', 'text' => '...']
+ * Ritorna la risposta testuale, oppure null in caso di errore/chiave assente.
+ */
+function gemini_chat($history) {
+    if (!GEMINI_API_KEY) return null;
+    $contents = array_map(fn($h) => ['role' => $h['role'], 'parts' => [['text' => $h['text']]]], $history);
+
+    $ch = curl_init('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['x-goog-api-key: ' . GEMINI_API_KEY, 'Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['contents' => $contents]));
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($http_code !== 200) return null;
+    $data = json_decode($response, true);
+    return $data['candidates'][0]['content']['parts'][0]['text'] ?? null;
+}
+
+/**
+ * [NUOVO 17/09] Contesto testuale compatto per la Chat AI: briefing di
+ * oggi, segnali BUY/SELL attivi, capitale. Usato come primo messaggio
+ * "di sistema" della conversazione, così la chat ragiona sui dati reali
+ * invece che a vuoto.
+ */
+function build_chat_context() {
+    $today = date('Y-m-d');
+    $briefing = supabase_query('daily_briefing', ['select' => '*', 'briefing_date' => 'eq.' . $today, 'order' => 'rank.asc']);
+    $signals = supabase_query('signals_filtered', ['select' => '*', 'order' => 'timestamp.desc', 'limit' => 15]);
+    $capital_rows = supabase_query('capital_state', ['select' => 'capital_eur', 'order' => 'created_at.desc', 'limit' => 1]);
+    $capital = $capital_rows[0]['capital_eur'] ?? null;
+
+    $lines = [];
+    $lines[] = "Sei l'assistente della dashboard SAPTA (sistema di trading algoritmico). Rispondi in italiano, in modo diretto, basandoti SOLO sui dati sotto. Non inventare prezzi o notizie che non hai. Se ti mancano dati per rispondere con sicurezza, dillo esplicitamente. Non sei un consulente finanziario: puoi analizzare e ragionare sui dati, non dare garanzie di rendimento.";
+    $lines[] = "\nCapitale attuale: " . ($capital !== null ? fmt_eur($capital) : 'non impostato');
+
+    $lines[] = "\nBriefing pre-apertura di oggi ($today):";
+    if ($briefing) {
+        foreach ($briefing as $b) {
+            $lines[] = "- {$b['ticker']}: {$b['motivazione']} (var1gg={$b['chg_1d']}%, GDELT={$b['gdelt_tone']})";
+        }
+    } else {
+        $lines[] = "(nessun briefing generato per oggi)";
+    }
+
+    $lines[] = "\nUltimi segnali della dashboard (Modulo E):";
+    if ($signals) {
+        foreach (array_slice($signals, 0, 10) as $s) {
+            $lines[] = "- {$s['ticker']}: {$s['filtered_action']}" .
+                (isset($s['final_rank_score']) && $s['final_rank_score'] !== null ? " (score={$s['final_rank_score']})" : '') .
+                (!empty($s['filter_reason']) ? " — {$s['filter_reason']}" : '');
+        }
+    } else {
+        $lines[] = "(nessun segnale disponibile)";
+    }
+
+    return implode("\n", $lines);
 }
