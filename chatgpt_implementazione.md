@@ -190,3 +190,19 @@ Dashboard frontend aggiornato e nuova sezione Universo implementata su `main`; `
 - Nuova tabella Supabase `daily_briefing` (migrazione applicata). Nessuna modifica alle pipeline A/H/B/E esistenti.
 
 ---
+
+## Sessione 17/09/2026 (parte 2) – Claude: recepito doc unificato v6, Fase 2 chat (tool layer)
+
+### Documento ricevuto
+L'utente ha passato a Claude un documento unificato (ChatGPT) che integra handoff di stato + analisi critica sulla Chat AI + brief v6. Diagnosi condivisa dalle due IA: la Chat AI era "passiva" (contesto fisso pre-caricato, non raccoglieva dati). Sequenza concordata: consolidare/validare PRIMA, ma trasformare la Chat AI (Fase 2 del doc) IN PARALLELO come primo passo verso v6 — non l'intero AI Analyst Team multi-agente (Fase 3+), giudicato complessità prematura su una base non ancora validata da segnali reali.
+
+### Modifiche effettuate da Claude
+- `dashboard/helpers.php` + `dashboard/chat.php`: sostituito il contesto fisso con un vero **tool layer** — 4 function declarations Gemini (`get_universe_movers`, `get_ticker_detail`, `get_screening_activity_today`, `get_sector_peers`), loop di function-calling con max 4 round per risposta, ogni tool esegue una query reale su Supabase (nessun dato inventato). Rimossa la frase "non dispongo di analisi previsionali" dalle istruzioni di sistema, sostituita dall'istruzione di spiegare il limite strutturale e poi comunque analizzare con i tool disponibili.
+- Testato in locale: tutte le funzioni tool con dati Supabase finti, nessun warning/errore. Il loop di function-calling con Gemini reale non è testabile senza chiave live — verificare al primo uso reale.
+- **Commit:** `dashboard/helpers.php` (ad11783631), `dashboard/chat.php` (6c04e7d1e1), `SAPTA_v5_1_1_STATO_IMPLEMENTAZIONE.md`.
+
+### Non fatto in questa sessione (deliberatamente)
+- AI Analyst Team multi-agente (Fase 3 del doc v6) — rimandato, serve prima vedere se anche solo la chat con tool layer funziona bene nell'uso reale.
+- Tool layer esteso a fonti esterne (premarket data provider, futures) — non disponibili nello stack attuale (yfinance/NewsAPI free non li coprono bene), da valutare se e quando serve davvero.
+
+---
