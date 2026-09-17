@@ -138,3 +138,38 @@ Dashboard frontend aggiornato e nuova sezione Universo implementata su `main`; `
 - `SAPTA_v5_1_1_STATO_IMPLEMENTAZIONE.md` non è stato modificato.
 
 ---
+
+## Sessione 16/09/2026 – Claude: diagnosi H1, Sezione 15/16, restyling dashboard v2
+
+### Richiesta
+- Aggiornare la roadmap valutando il piano Fase 5 (IBKR), riverificare le pipeline, completare Rischio di Portafoglio e Ranking finale, poi rifare la dashboard partendo dall'export reale da Aruba: stile più curato ma **chiaro, non dark** (il restyling dark/moderno della sessione 15/09 sopra non era mai stato caricato su Aruba), grafici singoli titoli più leggibili, e un sistema che guidi passo-passo al paper trading con alert spiegati basati su storico e contesto/notizie.
+
+### Modifiche effettuate da Claude
+
+#### 1. Diagnosi H1/H2
+- Verificato via query dirette su Supabase: H1 funziona correttamente. Nessun bug — `screening_candidates` a zero righe riflette soglie che raramente scattano insieme + storico intraday ancora corto, non un errore di codice.
+
+#### 2. `src/modulo_e_cost_filter.py` — Sezione 15 (Rischio di portafoglio) + Sezione 16 (Ranking)
+- Aggiunta `check_portfolio_exposure()`: esposizione totale stimata vs capitale, soglia placeholder 60%.
+- Aggiunta `compute_final_rank_score()`: score 0-100 combinato (anomaly, contesto, confidenza, rendimento netto, qualità dato, rischio). Pesi in `scoring_weights_v1.json` (bump a v3, sezione `ranking_weights`) — placeholder non calibrati.
+- Nuove colonne Supabase: `signals_filtered.sector_concentration_count`, `.portfolio_exposure_pct`, `.final_rank_score`.
+- **Commit:** `76d8d70e021d3d8e16ec5fa86a7def7482ed3612` (modulo_e), `b325f220f9e18bb324da46b58db097224ae725af` (scoring_weights v3).
+
+#### 3. `dashboard/` — restyling v2 (tema chiaro, sostituisce il dark di questo stesso file sopra)
+- Nuovo `assets/style.css` unico e coerente su tutte le pagine (in precedenza `universo.php` referenziava classi assenti dal CSS allora live).
+- `grafico.php` riscritto: assi con etichette in €, gridline, tooltip, area fill, target/invalidazione annotati con legenda, etichette X diradate.
+- `decisions.php`: guida passo-passo esplicita (5 step) al paper trading + spiegazione del segnale di origine.
+- Nuovo `helpers.php` condiviso: navigazione, formattazione, `sparkline_svg()`, e **`spiega_segnale()`** — traduce i punteggi (confidenza, context_score/GDELT, news, rischio di portafoglio) in una spiegazione testuale italiana per ogni segnale, mostrata come tendina "perché?" in dashboard e come pannello fisso nella pagina grafico.
+- Tutte le pagine testate in locale (php -l + server PHP integrato con `supabase_query` finta, dati pieni e vuoti): nessun warning/errore.
+- File consegnati all'utente come pacchetto scaricabile per il caricamento su Aruba, e committati anche in `dashboard/` nel repo (prima esisteva solo su Aruba senza backup).
+- **Commit:** 10 file in `dashboard/` (index, universo, grafico, decisions, capital, signals, anomalies, config, helpers, assets/style.css).
+
+#### 4. `SAPTA_v5_1_1_STATO_IMPLEMENTAZIONE.md`
+- **Aggiornato in questa sessione** (a differenza delle sessioni precedenti sopra): sezioni 6, 7, 8, 9 portate da ⬜ a ✅ dove pertinente, aggiunta sezione "0ter. Novità sessione 16/09", aggiornata la lista "Prossima azione consigliata".
+- **Commit:** `5e09dc18fa...`
+
+### Ambito modifiche
+- Modificati: `src/modulo_e_cost_filter.py`, `src/scoring_weights_v1.json`, tutta la cartella `dashboard/`, `SAPTA_v5_1_1_STATO_IMPLEMENTAZIONE.md`.
+- Migrazione Supabase applicata (nuove colonne `signals_filtered`, vedi punto 2). Nessuna modifica alle pipeline/workflow GitHub Actions.
+
+---
