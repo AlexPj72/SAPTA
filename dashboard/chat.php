@@ -31,7 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send'
         $to_send = array_slice($_SESSION['chat_history'], 0, 2);
         $to_send = array_merge($to_send, array_slice($_SESSION['chat_history'], -12));
 
-        $reply = gemini_chat($to_send);
+        $reply = gemini_chat_with_tools($to_send);
         if ($reply === null) {
             $error = GEMINI_API_KEY
                 ? "La Chat AI non ha risposto (errore di rete o quota Gemini esaurita). Riprova tra poco."
@@ -70,7 +70,7 @@ $visible_history = count($_SESSION['chat_history']) > 2 ? array_slice($_SESSION[
         <div>
             <div class="eyebrow">SAPTA v5.1.1</div>
             <h1>Chat AI</h1>
-            <p>Fai domande sul briefing di oggi, sui segnali attivi o sul rischio di portafoglio — risponde solo sui dati reali della dashboard.</p>
+            <p>Fai domande su un titolo, sui movimenti di oggi, sul radar anomalie o sul rischio — l'analista recupera i dati veri quando servono, non risponde a memoria.</p>
         </div>
         <a class="back-link" href="index.php">← Dashboard</a>
     </div>
@@ -92,7 +92,7 @@ $visible_history = count($_SESSION['chat_history']) > 2 ? array_slice($_SESSION[
 
     <div class="chat-box">
         <?php if (empty($visible_history)): ?>
-            <p class="muted">Nessun messaggio ancora. Prova a chiedere, ad esempio: "quali titoli del briefing di oggi hanno earnings imminenti?" oppure "che rischio di portafoglio ho con i segnali attivi?".</p>
+            <p class="muted">Nessun messaggio ancora. Prova a chiedere, ad esempio: "quali titoli si muovono di più oggi?", "dammi il dettaglio di MELI" oppure "cosa ha rilevato il radar anomalie oggi?".</p>
         <?php endif; ?>
         <?php foreach ($visible_history as $m): ?>
             <div class="chat-msg <?= e($m['role']) ?>"><?= nl2br(e($m['text'])) ?></div>
