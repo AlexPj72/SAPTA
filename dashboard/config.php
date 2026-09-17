@@ -3,6 +3,11 @@
 define('SUPABASE_URL', 'https://wpgozxddhlmzgymvpacq.supabase.co');
 define('SUPABASE_ANON_KEY', 'sb_publishable_oVcCx692_mxEzJTQMN8khA_TGMnPnMA');
 
+// [NUOVO 17/09] Stessa chiave Gemini già usata da Modulo I (GitHub Actions
+// secret GEMINI_API_KEY) - usala qui per la Chat AI. Se lasci vuoto, la
+// pagina chat.php mostra un avviso invece di rompersi.
+define('GEMINI_API_KEY', '');
+
 // Funzione helper per chiamate GET all'API REST di Supabase
 function supabase_query($table, $params = []) {
     $url = SUPABASE_URL . '/rest/v1/' . $table;
