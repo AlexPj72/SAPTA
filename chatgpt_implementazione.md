@@ -173,3 +173,20 @@ Dashboard frontend aggiornato e nuova sezione Universo implementata su `main`; `
 - Migrazione Supabase applicata (nuove colonne `signals_filtered`, vedi punto 2). Nessuna modifica alle pipeline/workflow GitHub Actions.
 
 ---
+
+## Sessione 17/09/2026 – Claude: Modulo Briefing pre-apertura + Chat AI
+
+### Richiesta
+- L'utente voleva sapere prima dell'apertura quali titoli avrebbero avuto rendimenti tipo +2/+4% e una chat AI integrata per ragionarci. Chiarito che la prima parte non è possibile in modo affidabile (limite strutturale dei mercati); costruita invece una shortlist qualitativa ragionata + chat per discuterne.
+
+### Modifiche effettuate da Claude
+- Nuovo `src/modulo_briefing.py` + workflow `sapta_briefing.yml` (06:00 UTC Lun-Ven): shortlist giornaliera via Gemini su trend/settore/GDELT/earnings/headline macro, scritta su nuova tabella `daily_briefing`.
+- Nuove pagine dashboard: `briefing.php` (shortlist con disclaimer esplicito "non è una previsione") e `chat.php` (conversazione Gemini con contesto reale: briefing, segnali, capitale).
+- Nuovi helper in `helpers.php`: `gemini_chat()`, `build_chat_context()`.
+- `config.php`: aggiunta costante `GEMINI_API_KEY` (vuota — da compilare dall'utente con la stessa chiave usata nei secret GitHub, non impostata da Claude per non gestire segreti nel repo).
+- **Commit:** modulo_briefing.py, sapta_briefing.yml, dashboard/{index,helpers,config,briefing,chat}.php.
+
+### Ambito modifiche
+- Nuova tabella Supabase `daily_briefing` (migrazione applicata). Nessuna modifica alle pipeline A/H/B/E esistenti.
+
+---
