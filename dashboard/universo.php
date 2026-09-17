@@ -1,14 +1,13 @@
 <?php
 require_once 'config.php';
+require_once 'helpers.php';
 
-// Universo completo: non dipende dai segnali generati.
 $universe = supabase_query('ticker_sectors', [
     'select' => 'ticker,sector',
     'order' => 'ticker.asc',
     'limit' => 500
 ]);
 
-// Ultime barre giornaliere sufficienti per ricavare prezzo, variazione e mini-grafico.
 $daily_rows = supabase_query('prezzi', [
     'select' => 'ticker,timestamp,close',
     'interval' => 'eq.1d',
@@ -24,7 +23,6 @@ foreach ($daily_rows as $row) {
     if (count($by_ticker[$ticker]) < 35) $by_ticker[$ticker][] = $row;
 }
 
-// Ultimi segnali: servono solo come informazione aggiuntiva, non per costruire l'universo.
 $latest_signals = supabase_query('signals_filtered', [
     'select' => 'ticker,filtered_action,timestamp',
     'order' => 'timestamp.desc',
@@ -36,29 +34,6 @@ foreach ($latest_signals as $s) {
     if ($t !== '' && !isset($signal_by_ticker[$t])) $signal_by_ticker[$t] = $s;
 }
 
-function e($value) {
-    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
-}
-
-function sparkline_svg($rows) {
-    if (count($rows) < 2) return '<span class="spark-empty">—</span>';
-    $rows = array_reverse($rows);
-    $values = array_map(fn($r) => (float)$r['close'], $rows);
-    $min = min($values); $max = max($values);
-    $range = ($max - $min) ?: 1;
-    $w = 120; $h = 34; $pad = 2;
-    $points = [];
-    $n = count($values);
-    foreach ($values as $i => $v) {
-        $x = $pad + ($i / max(1, $n - 1)) * ($w - 2 * $pad);
-        $y = $h - $pad - (($v - $min) / $range) * ($h - 2 * $pad);
-        $points[] = round($x, 1) . ',' . round($y, 1);
-    }
-    $first = $values[0]; $last = $values[count($values)-1];
-    $class = $last >= $first ? 'spark-up' : 'spark-down';
-    return '<svg class="sparkline '.$class.'" viewBox="0 0 '.$w.' '.$h.'" role="img" aria-label="Andamento ultimi dati giornalieri"><polyline points="'.e(implode(' ', $points)).'" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-}
-
 $rows = [];
 foreach ($universe as $u) {
     $ticker = $u['ticker'] ?? '';
@@ -67,17 +42,16 @@ foreach ($universe as $u) {
     $previous = $history[1] ?? null;
     $price = $latest['close'] ?? null;
     $change = null;
-    if ($price !== null && $previous && (float)$previous['close'] != 0) {
-        $change = ((float)$price / (float)$previous['close'] - 1) * 100;
+    if ($price !== null && $previous && (float) $previous['close'] != 0) {
+        $change = ((float) $price / (float) $previous['close'] - 1) * 100;
     }
     $rows[] = [
         'ticker' => $ticker,
         'sector' => $u['sector'] ?? '—',
         'price' => $price,
         'change' => $change,
-        'date' => $latest['timestamp'] ?? null,
         'history' => $history,
-        'signal' => $signal_by_ticker[$ticker]['filtered_action'] ?? null
+        'signal' => $signal_by_ticker[$ticker]['filtered_action'] ?? null,
     ];
 }
 
@@ -91,7 +65,7 @@ if ($search !== '') {
 }
 
 $sort = $_GET['sort'] ?? 'ticker';
-usort($rows, function($a, $b) use ($sort) {
+usort($rows, function ($a, $b) use ($sort) {
     if ($sort === 'change') return ($b['change'] ?? -INF) <=> ($a['change'] ?? -INF);
     if ($sort === 'price') return ($b['price'] ?? -INF) <=> ($a['price'] ?? -INF);
     return strcmp($a['ticker'], $b['ticker']);
@@ -106,6 +80,7 @@ usort($rows, function($a, $b) use ($sort) {
     <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
+
 <header class="hero compact">
     <div class="hero-top">
         <div>
@@ -117,13 +92,9 @@ usort($rows, function($a, $b) use ($sort) {
     </div>
 </header>
 
-<nav class="nav-bar">
-    <a href="index.php">Dashboard</a>
-    <a class="active" href="universo.php">Universo <span><?= count($universe) ?></span></a>
-    <a href="signals.php">Segnali</a>
-    <a href="decisions.php">Paper Trading</a>
-    <a href="capital.php">Capitale</a>
-</nav>
+<?php render_nav('universo.php'); ?>
+
+<div class="wrap">
 
 <section class="toolbar-card">
     <div>
@@ -133,27 +104,27 @@ usort($rows, function($a, $b) use ($sort) {
     <form method="get" class="universe-filters">
         <input type="search" name="q" value="<?= e($search) ?>" placeholder="Cerca ticker o settore…">
         <select name="filter">
-            <option value="all" <?= $filter==='all'?'selected':'' ?>>Tutti</option>
-            <option value="up" <?= $filter==='up'?'selected':'' ?>>In rialzo</option>
-            <option value="down" <?= $filter==='down'?'selected':'' ?>>In ribasso</option>
-            <option value="signals" <?= $filter==='signals'?'selected':'' ?>>Con segnale</option>
+            <option value="all" <?= $filter === 'all' ? 'selected' : '' ?>>Tutti</option>
+            <option value="up" <?= $filter === 'up' ? 'selected' : '' ?>>In rialzo</option>
+            <option value="down" <?= $filter === 'down' ? 'selected' : '' ?>>In ribasso</option>
+            <option value="signals" <?= $filter === 'signals' ? 'selected' : '' ?>>Con segnale</option>
         </select>
         <select name="sort">
-            <option value="ticker" <?= $sort==='ticker'?'selected':'' ?>>Ordina ticker</option>
-            <option value="change" <?= $sort==='change'?'selected':'' ?>>Ordina variazione</option>
-            <option value="price" <?= $sort==='price'?'selected':'' ?>>Ordina prezzo</option>
+            <option value="ticker" <?= $sort === 'ticker' ? 'selected' : '' ?>>Ordina ticker</option>
+            <option value="change" <?= $sort === 'change' ? 'selected' : '' ?>>Ordina variazione</option>
+            <option value="price" <?= $sort === 'price' ? 'selected' : '' ?>>Ordina prezzo</option>
         </select>
         <button type="submit">Applica</button>
     </form>
 </section>
 
-<section class="universe-card">
+<section>
     <div class="section-head">
         <div><h2><?= count($rows) ?> titoli visualizzati</h2><p class="muted">Ultimo close giornaliero disponibile</p></div>
-        <div class="legend"><span class="dot up-dot"></span> rialzo <span class="dot down-dot"></span> ribasso</div>
+        <div class="legend"><span class="dot up-dot"></span>rialzo<span class="dot down-dot"></span>ribasso</div>
     </div>
     <div class="table-wrap">
-    <table class="universe-table">
+    <table>
         <thead><tr><th>Ticker</th><th>Settore</th><th>Ultimo prezzo</th><th>Giorno</th><th>Trend</th><th>Segnale</th><th></th></tr></thead>
         <tbody>
         <?php foreach ($rows as $r): ?>
@@ -174,6 +145,8 @@ usort($rows, function($a, $b) use ($sort) {
     </table>
     </div>
 </section>
+
+</div>
 
 <footer>SAPTA · Universo monitorato: <?= count($universe) ?> ticker · Pagina generata <?= date('d/m/Y H:i') ?></footer>
 </body>
