@@ -168,6 +168,39 @@ Inoltre, in questa sessione:
   di "alert spiegati". File committati anche nel repo (cartella
   `dashboard/`, che prima era solo su Aruba senza backup — vedi sezione 9).
 
+## 0quater. Novità sessione 17/09 (riepilogo)
+
+- **Chiarito con l'utente**: nessun sistema può prevedere prima dell'apertura
+  quali titoli faranno un preciso +2/+4% quel giorno (limite strutturale dei
+  mercati, non di SAPTA — se un metodo lo facesse in modo affidabile,
+  smetterebbe di funzionare non appena abbastanza persone lo usassero).
+  Ridefinito l'obiettivo realistico insieme all'utente: una shortlist
+  qualitativa ragionata stile "nota mattutina di un analista", non una
+  previsione validata.
+- **Nuovo Modulo Briefing** (`src/modulo_briefing.py`, workflow
+  `sapta_briefing.yml`, 06:00 UTC Lun-Ven): per ogni ticker legge
+  variazione 1gg/5gg (da `prezzi`), settore, tono GDELT del paese (2
+  chiamate cache, non per ticker), earnings entro 1gg; una sola chiamata
+  NewsAPI per headline macro del giorno (non per ticker, per non consumare
+  la quota free già usata da Modulo B); UNA sola chiamata Gemini con tutto
+  il contesto in tabella compatta, che sceglie e motiva le 8 opportunità
+  più meritevoli di attenzione. Scrive su nuova tabella `daily_briefing`
+  (migrazione applicata). Esplicitamente etichettato ovunque (codice, UI)
+  come ipotesi qualitativa non validata da backtest, non una previsione di
+  prezzo. Testato in locale con dati/chiamate esterne finte: nessuna eccezione.
+- **Nuova Chat AI nella dashboard** (`dashboard/chat.php` + `helpers.php:
+  gemini_chat()`/`build_chat_context()`): conversazione con Gemini
+  (stessa auth/modello di Modulo I) basata SOLO sul contesto reale (briefing
+  di oggi, ultimi segnali, capitale) passato come primo turno della
+  conversazione — non inventa prezzi o notizie, e lo dichiara nel prompt di
+  sistema. Storia mantenuta in sessione PHP, non persistita su Supabase.
+  **Richiede che l'utente inserisca la propria chiave Gemini in
+  `dashboard/config.php` (costante `GEMINI_API_KEY`, oggi vuota per non
+  esporre segreti nel repo)** — senza chiave la pagina mostra un avviso
+  invece di rompersi.
+- Nuova pagina `dashboard/briefing.php`: mostra la shortlist del giorno con
+  lo stesso disclaimer, link ai grafici, e rimando alla Chat AI.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
