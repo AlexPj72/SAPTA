@@ -65,7 +65,7 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SAPTA — <?= e($ticker) ?></title>
     <link rel="stylesheet" href="assets/style.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+    <script src="assets/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -121,7 +121,10 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
     <?php if (empty($daily)): ?>
         <p class="muted">Nessuno storico giornaliero disponibile per questo ticker.</p>
     <?php else: ?>
-        <canvas id="dailyChart" height="100"></canvas>
+        <div class="chart-wrap">
+            <canvas id="dailyChart"></canvas>
+        </div>
+        <div id="dailyChartError" class="chart-error" style="display:none; margin-top:10px;">⚠️ Il grafico non si è caricato (Chart.js non disponibile). Prova a ricaricare la pagina; se il problema resta, segnalalo.</div>
         <div class="chart-legend-row">
             <span><i style="background:#4f46e5"></i> Prezzo di chiusura</span>
             <?php if ($target_price): ?><span><i style="background:#16a34a"></i> Target €<?= number_format($target_price, 2) ?></span><?php endif; ?>
@@ -137,7 +140,10 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
     <?php if (empty($intraday)): ?>
         <p class="muted">Nessun dato intraday disponibile per questo ticker.</p>
     <?php else: ?>
-        <canvas id="intradayChart" height="100"></canvas>
+        <div class="chart-wrap">
+            <canvas id="intradayChart"></canvas>
+        </div>
+        <div id="intradayChartError" class="chart-error" style="display:none; margin-top:10px;">⚠️ Il grafico non si è caricato (Chart.js non disponibile). Prova a ricaricare la pagina; se il problema resta, segnalalo.</div>
         <div class="chart-legend-row">
             <span><i style="background:#7c3aed"></i> Prezzo di chiusura (15m)</span>
         </div>
@@ -147,6 +153,14 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
 </div>
 
 <script>
+if (typeof Chart === 'undefined') {
+    // Chart.js non si è caricato: mostra un avviso visibile invece di una pagina bianca silenziosa
+    ['dailyChartError', 'intradayChartError'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'block';
+    });
+} else {
+
 const dailyLabels = <?= json_encode($daily_labels) ?>;
 const dailyValues = <?= json_encode($daily_values) ?>;
 const intradayLabels = <?= json_encode($intraday_labels) ?>;
@@ -210,6 +224,7 @@ function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel,
         data: { labels, datasets },
         options: {
             responsive: true,
+            maintainAspectRatio: false,
             interaction: { mode: 'index', intersect: false },
             plugins: {
                 legend: { display: false },
@@ -239,6 +254,8 @@ function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel,
 
 buildChart('dailyChart', dailyLabels, dailyValues, '#4f46e5', 'rgba(79,70,229,0.08)', 'Prezzo close', targetPrice, invalidationPrice);
 buildChart('intradayChart', intradayLabels, intradayValues, '#7c3aed', 'rgba(124,58,237,0.08)', 'Prezzo close (15m)', null, null);
+
+} // fine controllo Chart.js disponibile
 </script>
 
 <footer>SAPTA · <?= e($ticker) ?> · Pagina generata <?= date('d/m/Y H:i') ?></footer>
