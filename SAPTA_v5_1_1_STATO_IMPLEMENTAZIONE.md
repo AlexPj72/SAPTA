@@ -217,6 +217,37 @@ Inoltre, in questa sessione:
   un'analisi sistematica. Testato in locale (tutte le funzioni tool con dati
   finti): nessun warning/errore.
 
+## 0quinquies. Novità sessione 18/09 (riepilogo)
+
+- **Fix grafici**: Chart.js era caricato da CDN esterno (cdnjs.cloudflare.com),
+  probabilmente bloccato da ISP italiani o dal browser dell'utente (grafici
+  completamente vuoti su ogni titolo, confermato dall'utente in produzione).
+  Reso self-hosted: `dashboard/assets/chart.umd.min.js` (scaricato via npm,
+  minificato con terser, ~200KB), nessuna dipendenza di rete esterna residua.
+  Aggiunto anche un avviso visibile se la libreria non si carica, invece di
+  una pagina bianca silenziosa.
+- **Nuovo Modulo AI Watch** (`src/modulo_ai_watch.py`), agganciato come step
+  aggiuntivo nel workflow `sapta_fast.yml` (stesso schedule di H1: ogni 15
+  minuti, 9-17 UTC Lun-Ven — nessuna schedulazione/costo nuovo). Risponde
+  alla richiesta esplicita dell'utente: H1 scarta tutto ciò che non supera
+  ENTRAMBE le soglie rigide (volume≥3x E prezzo≥1.5%); questo modulo calcola
+  le stesse metriche per OGNI ticker con dati sufficienti (stessa regola
+  H1_MIN_BARS_FOR_BASELINE=8 e scarto se ultima barra non 'ok') e lascia a
+  Gemini il giudizio qualitativo su cosa merita attenzione anche sotto
+  soglia. Un solo alert per ticker al giorno (unique index su `ai_hypotheses`
+  ticker+data) per evitare spam sullo stesso movimento. Canali di notifica,
+  entrambi opzionali/fail-open: **Telegram** (bot API) ed **Email** (SMTP) —
+  richiedono che l'utente aggiunga i relativi secret GitHub
+  (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `SMTP_HOST`, `SMTP_PORT`,
+  `SMTP_USER`, `SMTP_PASSWORD`, `ALERT_EMAIL_TO`) — senza, il modulo salta
+  semplicemente l'invio, non blocca la pipeline. Aggiunta anche una sezione
+  "Ipotesi IA di oggi" in `dashboard/index.php` per vedere le stesse ipotesi
+  anche senza aspettare l'alert push. Testato in locale (calcolo metriche
+  con esclusioni corrette per barre insufficienti/dato stale, dedup,
+  formattazione messaggio): nessuna eccezione. Il loop reale con Gemini/
+  Telegram/SMTP live non è testabile senza credenziali - da verificare al
+  primo giorno di mercato aperto con i secret configurati.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
