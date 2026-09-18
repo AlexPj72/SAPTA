@@ -155,6 +155,35 @@ function spiega_segnale($signal, $candidate = null) {
 }
 
 /**
+ * [NUOVO 18/09] Bandiera del mercato di un ticker. Universo SAPTA copre
+ * solo USA (nessun suffisso) e Italia/Milano (suffisso .MI) - nessun
+ * titolo di Londra o altre piazze europee al momento, quindi solo 2 casi.
+ */
+function market_flag($ticker) {
+    if (str_ends_with($ticker, '.MI')) return '🇮🇹';
+    return '🇺🇸';
+}
+
+/**
+ * [NUOVO 18/09] Stato approssimativo del mercato (aperto/chiuso), solo per
+ * dare un'indicazione visiva - NON tiene conto di festività locali, solo
+ * degli orari standard. USA: 13:30-20:00 UTC (EDT); Italia: 07:00-15:30 UTC
+ * (CEST) - questi orari si spostano di un'ora con l'ora legale/solare.
+ */
+function market_status($ticker) {
+    $is_it = str_ends_with($ticker, '.MI');
+    $now_utc = (int) gmdate('Hi'); // es. 1345 per le 13:45 UTC
+    $weekday = (int) gmdate('N'); // 1=lunedì … 7=domenica
+    if ($weekday >= 6) return ['aperto' => false, 'label' => 'chiuso (weekend)'];
+    if ($is_it) {
+        $aperto = $now_utc >= 700 && $now_utc < 1530;
+    } else {
+        $aperto = $now_utc >= 1330 && $now_utc < 2000;
+    }
+    return ['aperto' => $aperto, 'label' => $aperto ? 'aperto ora (indicativo)' : 'chiuso ora (indicativo)'];
+}
+
+/**
  * [NUOVO 17/09 - Fase 2 SAPTA v6] Tool layer minimale per la Chat AI.
  * Invece di passare un contesto fisso (approccio precedente, troppo
  * "passivo" - la chat poteva solo commentare dati già pronti), la chat ora
