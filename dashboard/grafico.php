@@ -17,20 +17,29 @@ $daily = supabase_query('prezzi', [
 ]);
 $daily = array_reverse($daily);
 
-// Intraday 15m: solo l'ultima sessione di mercato disponibile (non un mix
-// di più giorni) - prendo un buffer ampio, poi filtro lato PHP sulla data
-// dell'ultima barra disponibile. Così il grafico riparte "da zero" ad ogni
-// nuova sessione invece di trascinarsi dietro i giorni precedenti.
+// Intraday 15m: fetch unico e ampio, riusato sia per la sessione corrente
+// (grafico intraday) sia per il trend settimanale (ultimi 5 giorni con dati).
 $intraday_raw = supabase_query('prezzi', [
     'select' => 'timestamp,close,volume',
     'ticker' => 'eq.' . $ticker,
     'interval' => 'eq.15m',
     'order' => 'timestamp.desc',
-    'limit' => 200
+    'limit' => 600
 ]);
 $last_session_date = !empty($intraday_raw) ? substr($intraday_raw[0]['timestamp'], 0, 10) : null;
 $intraday = array_values(array_filter($intraday_raw, fn($r) => substr($r['timestamp'], 0, 10) === $last_session_date));
 $intraday = array_reverse($intraday);
+
+// Trend settimanale: ultimi 5 giorni di mercato con dati intraday disponibili
+// (non ultimi 7 giorni di calendario, per non contare weekend a vuoto)
+$distinct_dates = array_values(array_unique(array_map(fn($r) => substr($r['timestamp'], 0, 10), $intraday_raw)));
+sort($distinct_dates);
+$weekly_dates = array_slice($distinct_dates, -5);
+$weekly = array_values(array_filter($intraday_raw, fn($r) => in_array(substr($r['timestamp'], 0, 10), $weekly_dates, true)));
+$weekly = array_reverse($weekly);
+
+// Trend mensile: ultimi 30 giorni di trading dallo storico giornaliero
+$monthly = array_slice($daily, -30);
 
 // Ultimo segnale filtrato per questo ticker + il candidato H2 collegato, per la spiegazione
 $last_signal_rows = supabase_query('signals_filtered', [
@@ -60,8 +69,13 @@ $max_120 = $closes_120 ? max($closes_120) : null;
 
 $daily_labels = array_map(fn($d) => date('d/m/y', strtotime($d['timestamp'])), $daily);
 $daily_values = array_map(fn($d) => (float) $d['close'], $daily);
+$monthly_labels = array_map(fn($d) => date('d/m', strtotime($d['timestamp'])), $monthly);
+$monthly_values = array_map(fn($d) => (float) $d['close'], $monthly);
+$weekly_labels = array_map(fn($d) => date('d/m H:i', strtotime($d['timestamp'])), $weekly);
+$weekly_values = array_map(fn($d) => (float) $d['close'], $weekly);
 $intraday_labels = array_map(fn($d) => date('H:i', strtotime($d['timestamp'])), $intraday);
 $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
+$market = market_status($ticker);
 ?>
 <!DOCTYPE html>
 <html lang="it">
@@ -79,12 +93,14 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
     <div class="hero-top">
         <div>
             <div class="eyebrow">SAPTA v5.1.1</div>
-            <h1><?= e($ticker) ?><?php if ($change_pct !== null): ?>
+            <h1><?= market_flag($ticker) ?> <?= e($ticker) ?><?php if ($change_pct !== null): ?>
                 <span style="font-size:16px; font-weight:700; opacity:.9;">
                     <?= $change_pct >= 0 ? '▲' : '▼' ?> <?= number_format(abs($change_pct), 2) ?>%
                 </span>
             <?php endif; ?></h1>
-            <p><?= $last_close !== null ? 'Ultimo close: ' . fmt_eur($last_close) : 'Nessuno storico disponibile' ?></p>
+            <p><?= $last_close !== null ? 'Ultimo close: ' . fmt_eur($last_close) : 'Nessuno storico disponibile' ?>
+                · <span class="badge <?= $market['aperto'] ? 'approved' : 'hold' ?>"><?= $market['aperto'] ? '🟢' : '⚪' ?> <?= e($market['label']) ?></span>
+            </p>
         </div>
         <a class="back-link" href="index.php">← Dashboard</a>
     </div>
@@ -141,6 +157,36 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
 
 <section class="chart-card">
     <div class="section-head">
+        <div><h2>Trend ultimo mese</h2><p class="muted">Ultimi <?= count($monthly) ?> giorni di trading</p></div>
+    </div>
+    <?php if (empty($monthly)): ?>
+        <p class="muted">Nessuno storico disponibile per questo periodo.</p>
+    <?php else: ?>
+        <div class="chart-wrap">
+            <canvas id="monthlyChart"></canvas>
+        </div>
+        <div id="monthlyChartError" class="chart-error" style="display:none; margin-top:10px;">⚠️ Il grafico non si è caricato (Chart.js non disponibile). Prova a ricaricare la pagina; se il problema resta, segnalalo.</div>
+        <div class="chart-legend-row"><span><i style="background:#0891b2"></i> Prezzo di chiusura</span></div>
+    <?php endif; ?>
+</section>
+
+<section class="chart-card">
+    <div class="section-head">
+        <div><h2>Trend ultima settimana</h2><p class="muted"><?= !empty($weekly_dates) ? count($weekly_dates) . ' giorni di mercato, dettaglio ogni 15 min' : 'Nessun dato' ?></p></div>
+    </div>
+    <?php if (empty($weekly)): ?>
+        <p class="muted">Nessun dato intraday sufficiente per la settimana (lo storico a 15 minuti è ancora in accumulo).</p>
+    <?php else: ?>
+        <div class="chart-wrap">
+            <canvas id="weeklyChart"></canvas>
+        </div>
+        <div id="weeklyChartError" class="chart-error" style="display:none; margin-top:10px;">⚠️ Il grafico non si è caricato (Chart.js non disponibile). Prova a ricaricare la pagina; se il problema resta, segnalalo.</div>
+        <div class="chart-legend-row"><span><i style="background:#ea580c"></i> Prezzo di chiusura (15m)</span></div>
+    <?php endif; ?>
+</section>
+
+<section class="chart-card">
+    <div class="section-head">
         <div><h2>Intraday 15 minuti</h2><p class="muted"><?= $last_session_date ? 'Sessione del ' . e(date('d/m/Y', strtotime($last_session_date))) . ' — ' . count($intraday) . ' barre, si aggiorna da solo ogni 15 min' : 'Nessun dato' ?></p></div>
     </div>
     <?php if (empty($intraday)): ?>
@@ -161,7 +207,7 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
 <script>
 if (typeof Chart === 'undefined') {
     // Chart.js non si è caricato: mostra un avviso visibile invece di una pagina bianca silenziosa
-    ['dailyChartError', 'intradayChartError'].forEach(id => {
+    ['dailyChartError', 'monthlyChartError', 'weeklyChartError', 'intradayChartError'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'block';
     });
@@ -169,6 +215,10 @@ if (typeof Chart === 'undefined') {
 
 const dailyLabels = <?= json_encode($daily_labels) ?>;
 const dailyValues = <?= json_encode($daily_values) ?>;
+const monthlyLabels = <?= json_encode($monthly_labels) ?>;
+const monthlyValues = <?= json_encode($monthly_values) ?>;
+const weeklyLabels = <?= json_encode($weekly_labels) ?>;
+const weeklyValues = <?= json_encode($weekly_values) ?>;
 const intradayLabels = <?= json_encode($intraday_labels) ?>;
 const intradayValues = <?= json_encode($intraday_values) ?>;
 const targetPrice = <?= $target_price !== null ? json_encode((float) $target_price) : 'null' ?>;
@@ -259,6 +309,8 @@ function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel,
 }
 
 buildChart('dailyChart', dailyLabels, dailyValues, '#4f46e5', 'rgba(79,70,229,0.08)', 'Prezzo close', targetPrice, invalidationPrice);
+buildChart('monthlyChart', monthlyLabels, monthlyValues, '#0891b2', 'rgba(8,145,178,0.08)', 'Prezzo close', null, null);
+buildChart('weeklyChart', weeklyLabels, weeklyValues, '#ea580c', 'rgba(234,88,12,0.08)', 'Prezzo close (15m)', null, null);
 buildChart('intradayChart', intradayLabels, intradayValues, '#7c3aed', 'rgba(124,58,237,0.08)', 'Prezzo close (15m)', null, null);
 
 } // fine controllo Chart.js disponibile
