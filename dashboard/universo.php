@@ -60,6 +60,8 @@ $search = trim($_GET['q'] ?? '');
 if ($filter === 'up') $rows = array_values(array_filter($rows, fn($r) => $r['change'] !== null && $r['change'] > 0));
 if ($filter === 'down') $rows = array_values(array_filter($rows, fn($r) => $r['change'] !== null && $r['change'] < 0));
 if ($filter === 'signals') $rows = array_values(array_filter($rows, fn($r) => $r['signal'] !== null));
+if ($filter === 'usa') $rows = array_values(array_filter($rows, fn($r) => !str_ends_with($r['ticker'], '.MI')));
+if ($filter === 'it') $rows = array_values(array_filter($rows, fn($r) => str_ends_with($r['ticker'], '.MI')));
 if ($search !== '') {
     $rows = array_values(array_filter($rows, fn($r) => stripos($r['ticker'], $search) !== false || stripos($r['sector'], $search) !== false));
 }
@@ -108,6 +110,8 @@ usort($rows, function ($a, $b) use ($sort) {
             <option value="up" <?= $filter === 'up' ? 'selected' : '' ?>>In rialzo</option>
             <option value="down" <?= $filter === 'down' ? 'selected' : '' ?>>In ribasso</option>
             <option value="signals" <?= $filter === 'signals' ? 'selected' : '' ?>>Con segnale</option>
+            <option value="usa" <?= $filter === 'usa' ? 'selected' : '' ?>>🇺🇸 Solo USA</option>
+            <option value="it" <?= $filter === 'it' ? 'selected' : '' ?>>🇮🇹 Solo Italia</option>
         </select>
         <select name="sort">
             <option value="ticker" <?= $sort === 'ticker' ? 'selected' : '' ?>>Ordina ticker</option>
@@ -129,7 +133,7 @@ usort($rows, function ($a, $b) use ($sort) {
         <tbody>
         <?php foreach ($rows as $r): ?>
             <tr>
-                <td><a class="ticker-link" href="grafico.php?ticker=<?= urlencode($r['ticker']) ?>"><?= e($r['ticker']) ?></a></td>
+                <td><?= market_flag($r['ticker']) ?> <a class="ticker-link" href="grafico.php?ticker=<?= urlencode($r['ticker']) ?>"><?= e($r['ticker']) ?></a></td>
                 <td class="muted"><?= e($r['sector']) ?></td>
                 <td><?= $r['price'] !== null ? number_format($r['price'], 2) : '—' ?></td>
                 <td class="<?= ($r['change'] ?? 0) >= 0 ? 'positive' : 'negative' ?>">
