@@ -157,6 +157,40 @@ $n_candidates_today = count($candidates);
 <section>
     <div class="section-head">
         <div>
+            <h2>Ipotesi IA di oggi (sotto soglia H1)</h2>
+            <p class="muted">Valutazioni qualitative — non una previsione, non validate da backtest.</p>
+        </div>
+    </div>
+    <?php
+    $hypotheses = supabase_query('ai_hypotheses', ['select' => '*', 'hypothesis_date' => 'eq.' . date('Y-m-d'), 'order' => 'created_at.desc']);
+    ?>
+    <?php if (empty($hypotheses)): ?>
+        <p class="empty-state">Nessuna ipotesi oggi finora.</p>
+    <?php else: ?>
+    <div class="table-wrap">
+    <table>
+        <thead><tr><th>Ora</th><th>Ticker</th><th>Livello</th><th>Motivazione</th><th>Var.</th><th>Volume</th><th>Alert</th></tr></thead>
+        <tbody>
+        <?php foreach ($hypotheses as $h): ?>
+        <tr>
+            <td><?= e(date('H:i', strtotime($h['created_at']))) ?></td>
+            <td><a class="ticker-link" href="grafico.php?ticker=<?= urlencode($h['ticker']) ?>"><?= e($h['ticker']) ?></a></td>
+            <td><span class="badge <?= $h['livello'] === 'alto' ? 'warn' : 'hold' ?>"><?= e($h['livello']) ?></span></td>
+            <td style="white-space:normal; max-width:380px;"><?= e($h['motivazione']) ?></td>
+            <td class="<?= ($h['price_change_pct'] ?? 0) >= 0 ? 'positive' : 'negative' ?>"><?= number_format($h['price_change_pct'], 2) ?>%</td>
+            <td><?= number_format($h['volume_ratio'], 1) ?>x</td>
+            <td><?= (!empty($h['alerted_telegram']) ? '📱' : '') . (!empty($h['alerted_email']) ? '✉️' : '') ?: '—' ?></td>
+        </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+    </div>
+    <?php endif; ?>
+</section>
+
+<section>
+    <div class="section-head">
+        <div>
             <h2>Candidati screening (Modulo H, ultimi 15)</h2>
             <p class="muted">Anomalie rilevate da H1/H2, prima ancora di arrivare all'analisi di Modulo B.</p>
         </div>
