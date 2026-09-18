@@ -17,14 +17,19 @@ $daily = supabase_query('prezzi', [
 ]);
 $daily = array_reverse($daily);
 
-// Intraday 15m (ultime 100 barre)
-$intraday = supabase_query('prezzi', [
+// Intraday 15m: solo l'ultima sessione di mercato disponibile (non un mix
+// di più giorni) - prendo un buffer ampio, poi filtro lato PHP sulla data
+// dell'ultima barra disponibile. Così il grafico riparte "da zero" ad ogni
+// nuova sessione invece di trascinarsi dietro i giorni precedenti.
+$intraday_raw = supabase_query('prezzi', [
     'select' => 'timestamp,close,volume',
     'ticker' => 'eq.' . $ticker,
     'interval' => 'eq.15m',
     'order' => 'timestamp.desc',
-    'limit' => 100
+    'limit' => 200
 ]);
+$last_session_date = !empty($intraday_raw) ? substr($intraday_raw[0]['timestamp'], 0, 10) : null;
+$intraday = array_values(array_filter($intraday_raw, fn($r) => substr($r['timestamp'], 0, 10) === $last_session_date));
 $intraday = array_reverse($intraday);
 
 // Ultimo segnale filtrato per questo ticker + il candidato H2 collegato, per la spiegazione
@@ -55,7 +60,7 @@ $max_120 = $closes_120 ? max($closes_120) : null;
 
 $daily_labels = array_map(fn($d) => date('d/m/y', strtotime($d['timestamp'])), $daily);
 $daily_values = array_map(fn($d) => (float) $d['close'], $daily);
-$intraday_labels = array_map(fn($d) => date('d/m H:i', strtotime($d['timestamp'])), $intraday);
+$intraday_labels = array_map(fn($d) => date('H:i', strtotime($d['timestamp'])), $intraday);
 $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
 ?>
 <!DOCTYPE html>
@@ -63,6 +68,7 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="900">
     <title>SAPTA — <?= e($ticker) ?></title>
     <link rel="stylesheet" href="assets/style.css">
     <script src="assets/chart.umd.min.js"></script>
@@ -135,7 +141,7 @@ $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
 
 <section class="chart-card">
     <div class="section-head">
-        <div><h2>Intraday 15 minuti</h2><p class="muted">Ultime <?= count($intraday) ?> barre</p></div>
+        <div><h2>Intraday 15 minuti</h2><p class="muted"><?= $last_session_date ? 'Sessione del ' . e(date('d/m/Y', strtotime($last_session_date))) . ' — ' . count($intraday) . ' barre, si aggiorna da solo ogni 15 min' : 'Nessun dato' ?></p></div>
     </div>
     <?php if (empty($intraday)): ?>
         <p class="muted">Nessun dato intraday disponibile per questo ticker.</p>
