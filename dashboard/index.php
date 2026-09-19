@@ -170,13 +170,20 @@ $n_candidates_today = count($candidates);
     <?php else: ?>
     <div class="table-wrap">
     <table>
-        <thead><tr><th>Ora</th><th>Ticker</th><th>Tipo</th><th>Livello</th><th>Motivazione</th><th>Var.</th><th>Volume</th><th>Segnale</th><th>Alert</th></tr></thead>
+        <thead><tr><th>Ora</th><th>Ticker</th><th>Tipo</th><th>Stato</th><th>Livello</th><th>Motivazione</th><th>Var.</th><th>Volume</th><th>Segnale</th><th>Alert</th></tr></thead>
         <tbody>
         <?php foreach ($hypotheses as $h): ?>
         <tr>
             <td><?= e(date('H:i', strtotime($h['created_at']))) ?></td>
             <td><a class="ticker-link" href="grafico.php?ticker=<?= urlencode($h['ticker']) ?>"><?= e($h['ticker']) ?></a></td>
             <td class="muted"><?= e($tipo_label[$h['tipo_anomalia'] ?? ''] ?? '—') ?></td>
+            <td>
+                <?php $st = $h['status'] ?? 'in_osservazione'; $st_map = [
+                    'confermato' => ['✅ confermato', 'approved'], 'invalidato' => ['❌ invalidato', 'rejected'],
+                    'scaduto' => ['⏱ scaduto', 'hold'], 'in_osservazione' => ['👀 in osservazione', 'warn'],
+                ]; [$st_txt, $st_cls] = $st_map[$st] ?? $st_map['in_osservazione']; ?>
+                <span class="badge <?= $st_cls ?>"><?= e($st_txt) ?></span>
+            </td>
             <td><span class="badge <?= $h['livello'] === 'alto' ? 'warn' : 'hold' ?>"><?= e($h['livello']) ?></span></td>
             <td style="white-space:normal; max-width:340px;"><?= e($h['motivazione']) ?></td>
             <td class="<?= ($h['price_change_pct'] ?? 0) >= 0 ? 'positive' : 'negative' ?>"><?= number_format($h['price_change_pct'], 2) ?>%</td>
