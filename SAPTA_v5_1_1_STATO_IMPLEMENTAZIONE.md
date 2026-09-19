@@ -294,6 +294,40 @@ Inoltre, in questa sessione:
   il flusso dati è finalmente regolare - punto di partenza concreto per la
   validazione più volte indicata come priorità nei documenti di progetto.
 
+## 0septies. Novità sessione 19/09 (riepilogo) — Punto 1: verifica automatica esiti
+
+- **Contesto**: l'utente ha ricevuto da ChatGPT un'analisi manuale delle
+  mail AI Watch del 18/09, confrontando ogni alert con la chiusura reale
+  (fonte: stockanalysis.com). Conclusione condivisa: la combinazione
+  prezzo+volume (5ª mail: NFLX, AMD, ADI, PEP, CRWD, NOW, SNOW) era quella
+  con la conferma più solida - esattamente i casi che dal fix del 18/09
+  sera vengono ormai esclusi da AI Watch e dirottati alla pipeline H1/H2
+  vera (non più mescolati nei WATCH).
+- **Nuovo Modulo EOD Verify** (`src/modulo_eod_verify.py`), agganciato come
+  step aggiuntivo nel workflow `sapta_us_close.yml` (21:30 UTC, dopo la
+  chiusura sia di Milano che di Wall Street - nessun workflow/schedule
+  nuovo). Per ogni ipotesi AI Watch della giornata: confronta il prezzo al
+  momento dell'alert (`entry_price`, nuovo campo salvato da
+  `modulo_ai_watch.py`) con la chiusura reale, calcola se la direzione
+  originale ha tenuto (`eod_direction_held`) e aggrega un riepilogo
+  giornaliero per tipo di anomalia (prezzo/volume/debole) sulla nuova
+  tabella `ai_watch_daily_stats`. Automatizza esattamente il controllo che
+  ChatGPT ha fatto a mano - con il vantaggio di usare l'orario esatto di
+  ogni alert invece di stimare da chiusure giornaliere.
+  **Scopo dichiarato**: costruire nel tempo i dati reali per calibrare le
+  soglie di conferma di AI Watch (oggi placeholder 60%/30%, dichiarati tali
+  fin dall'inizio), invece di continuare a stimarle a occhio.
+- **Dashboard**: nuovo KPI "Affidabilità AI Watch" in `index.php` (% di
+  ipotesi che hanno tenuto la direzione, ultima giornata disponibile) e
+  nuova colonna "Esito EOD" nella tabella Ipotesi IA (tenuta/invertita +
+  variazione di chiusura).
+- Testato in locale (3 casi: direzione confermata, invertita, ipotesi senza
+  entry_price correttamente saltata): nessuna eccezione.
+- **Prossimi punti concordati con l'utente, uno alla volta**: (1) fatto
+  qui sopra; (2) vista unica "Da valutare oggi" + pagina di decisione
+  guidata per singolo titolo; (3) cruscotto paper trading con curva P&L nel
+  tempo; (4) filtro mercato/settore (rimandato, più corposo).
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
