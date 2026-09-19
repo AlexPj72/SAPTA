@@ -247,3 +247,19 @@ L'utente ha portato un'analisi di ChatGPT che confronta manualmente gli alert AI
 4. Filtro mercato/settore (rimandato, più corposo)
 
 ---
+
+## Sessione 19/09/2026 (parte 2) – Claude: Punto 2 di 4, vista e decisione guidata
+
+### Modifiche effettuate da Claude
+- Nuovo `dashboard/today.php` ("Da valutare oggi"): unifica segnali operativi reali + ipotesi AI Watch confermate in un'unica lista ordinata per orario, un pulsante "Valuta →" per elemento.
+- Nuovo `dashboard/valuta.php`: pagina guidata per singolo titolo - grafico ridotto, spiegazione, rischio (se disponibile), form di decisione che invia a `decisions.php` (riuso, nessuna duplicazione di logica).
+- Refactor: funzioni Chart.js estratte in `dashboard/assets/charts.js`, riusate da `grafico.php` e `valuta.php`; corretto un bug potenziale (`Chart.defaults` senza guardia) emerso durante l'estrazione.
+- Nuova voce nav "🎯 Da valutare".
+- **Commit:** dashboard/today.php (abee86a950), dashboard/valuta.php (d63c91e8f1), dashboard/assets/charts.js (6f27f5cba4), dashboard/grafico.php (b99e7728e7), dashboard/helpers.php (c908b1e7d6).
+- Testato in locale: un warning trovato e corretto, resto pulito.
+
+### Prossimi punti
+3. Cruscotto paper trading con curva P&L nel tempo
+4. Filtro mercato/settore (rimandato)
+
+---
