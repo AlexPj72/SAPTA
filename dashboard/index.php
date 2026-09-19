@@ -157,33 +157,40 @@ $n_candidates_today = count($candidates);
 <section>
     <div class="section-head">
         <div>
-            <h2>Ipotesi IA di oggi (sotto soglia H1)</h2>
-            <p class="muted">Valutazioni qualitative — non una previsione, non validate da backtest.</p>
+            <h2>Ipotesi IA di oggi (osservazione, sotto soglia H1)</h2>
+            <p class="muted">👀 Solo watch — non sono segnali operativi. Se un titolo ha già un segnale reale attivo, lo vedi in colonna "Segnale".</p>
         </div>
     </div>
     <?php
     $hypotheses = supabase_query('ai_hypotheses', ['select' => '*', 'hypothesis_date' => 'eq.' . date('Y-m-d'), 'order' => 'created_at.desc']);
+    $tipo_label = ['volume' => 'Volume↑, aspetta prezzo', 'prezzo' => 'Prezzo↑, aspetta volume', 'debole' => 'Segnale debole'];
     ?>
     <?php if (empty($hypotheses)): ?>
         <p class="empty-state">Nessuna ipotesi oggi finora.</p>
     <?php else: ?>
     <div class="table-wrap">
     <table>
-        <thead><tr><th>Ora</th><th>Ticker</th><th>Livello</th><th>Motivazione</th><th>Var.</th><th>Volume</th><th>Alert</th></tr></thead>
+        <thead><tr><th>Ora</th><th>Ticker</th><th>Tipo</th><th>Livello</th><th>Motivazione</th><th>Var.</th><th>Volume</th><th>Segnale</th><th>Alert</th></tr></thead>
         <tbody>
         <?php foreach ($hypotheses as $h): ?>
         <tr>
             <td><?= e(date('H:i', strtotime($h['created_at']))) ?></td>
             <td><a class="ticker-link" href="grafico.php?ticker=<?= urlencode($h['ticker']) ?>"><?= e($h['ticker']) ?></a></td>
+            <td class="muted"><?= e($tipo_label[$h['tipo_anomalia'] ?? ''] ?? '—') ?></td>
             <td><span class="badge <?= $h['livello'] === 'alto' ? 'warn' : 'hold' ?>"><?= e($h['livello']) ?></span></td>
-            <td style="white-space:normal; max-width:380px;"><?= e($h['motivazione']) ?></td>
+            <td style="white-space:normal; max-width:340px;"><?= e($h['motivazione']) ?></td>
             <td class="<?= ($h['price_change_pct'] ?? 0) >= 0 ? 'positive' : 'negative' ?>"><?= number_format($h['price_change_pct'], 2) ?>%</td>
             <td><?= number_format($h['volume_ratio'], 1) ?>x</td>
+            <td><?php if (!empty($h['has_active_signal'])): ?>
+                <span class="badge approved">🟢 <?= e($h['linked_action']) ?></span>
+                <br><small class="muted">T <?= number_format($h['linked_target_price'] ?? 0, 2) ?> / I <?= number_format($h['linked_invalidation_price'] ?? 0, 2) ?></small>
+            <?php else: ?><span class="muted">nessuno</span><?php endif; ?></td>
             <td><?= (!empty($h['alerted_telegram']) ? '📱' : '') . (!empty($h['alerted_email']) ? '✉️' : '') ?: '—' ?></td>
         </tr>
         <?php endforeach; ?>
         </tbody>
     </table>
+
     </div>
     <?php endif; ?>
 </section>
