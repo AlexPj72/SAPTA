@@ -24,6 +24,7 @@ function fmt_pct($v, $dec = 2) {
 function render_nav($active) {
     $items = [
         'index.php'     => 'Dashboard',
+        'today.php'     => '🎯 Da valutare',
         'briefing.php'  => 'Briefing',
         'universo.php'  => 'Universo',
         'anomalies.php' => 'Radar anomalie',
