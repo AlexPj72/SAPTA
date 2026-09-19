@@ -1,0 +1,136 @@
+"""
+Modulo EOD Verify (NUOVO 19/09): verifica automatica degli esiti reali
+
+Risponde alla richiesta dell'utente dopo l'analisi manuale fatta con
+ChatGPT sulle mail del 18/09 (confronto alert vs chiusura reale, fatto a
+mano confrontando prezzi da stockanalysis.com): SAPTA deve fare da sola,
+ogni giorno, quello che ChatGPT ha fatto una volta a mano - controllare se
+la direzione indicata da ogni ipotesi AI Watch ha tenuto fino a chiusura.
+
+Agganciato al workflow sapta_us_close (21:30 UTC, dopo la chiusura sia di
+Milano - già chiusa da ore a quell'ora - sia di Wall Street) cosi' le
+chiusure di entrambi i mercati sono gia' finalizzate, senza bisogno di un
+workflow o uno schedule dedicato.
+
+Per ogni ipotesi AI Watch di oggi (qualsiasi stato: in_osservazione,
+confermato, invalidato, scaduto):
+- legge entry_price (prezzo al momento dell'alert, salvato da
+  modulo_ai_watch.py) e il close di oggi da 'prezzi' (interval=1d)
+- calcola la variazione reale fino a chiusura ed 'eod_direction_held'
+  (la direzione del movimento originale ha tenuto fino a fine giornata?)
+- aggrega un riepilogo giornaliero per tipo di anomalia (prezzo/volume/
+  debole) su ai_watch_daily_stats - la base dati con cui in futuro si
+  potranno calibrare sul serio le soglie di conferma (oggi placeholder
+  60%/30%, dichiarati come tali fin dall'inizio in modulo_ai_watch.py)
+
+Fail-open: un ticker senza dati sufficienti viene saltato, non blocca gli
+altri.
+"""
+from datetime import datetime, timezone
+from config import supabase
+
+
+def get_today_closes():
+    """Chiusure di oggi per tutto l'universo, una sola query invece di una
+    per ticker (stesso pattern già usato in modulo_briefing.py)."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    try:
+        response = (supabase.table('prezzi')
+                    .select('ticker,timestamp,close')
+                    .eq('interval', '1d')
+                    .gte('timestamp', today + 'T00:00:00')
+                    .execute())
+    except Exception as e:
+        print(f"⚠️ Errore lettura chiusure di oggi: {e}")
+        return {}
+    closes = {}
+    for row in response.data or []:
+        t = row.get('ticker')
+        if t and row.get('close') is not None:
+            closes[t] = float(row['close'])  # un solo bar giornaliero per ticker per data, non serve dedup
+    return closes
+
+
+def run_eod_verify():
+    print("📊 Modulo EOD Verify: avvio...")
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    try:
+        rows = (supabase.table('ai_hypotheses')
+                .select('id,ticker,price_change_pct,entry_price,tipo_anomalia')
+                .eq('hypothesis_date', today)
+                .execute())
+        hypotheses = rows.data or []
+    except Exception as e:
+        print(f"⚠️ Errore lettura ipotesi di oggi: {e}")
+        return
+
+    if not hypotheses:
+        print("   Nessuna ipotesi da verificare oggi.")
+        return
+
+    closes = get_today_closes()
+    if not closes:
+        print("   Nessuna chiusura disponibile, riprovo al prossimo giro utile.")
+        return
+
+    stats = {'totale': 0, 'confermata': 0}
+    per_tipo = {'prezzo': [0, 0], 'volume': [0, 0], 'debole': [0, 0]}  # [totale, confermata]
+
+    for h in hypotheses:
+        ticker = h['ticker']
+        entry_price = h.get('entry_price')
+        close_price = closes.get(ticker)
+        if entry_price is None or close_price is None:
+            continue  # ipotesi precedenti al fix entry_price, o ticker senza chiusura oggi - salta
+
+        eod_change_pct = round((close_price / entry_price - 1) * 100, 2)
+        original_pct = h.get('price_change_pct') or 0
+        direction_held = (original_pct >= 0) == (eod_change_pct >= 0)
+
+        try:
+            supabase.table('ai_hypotheses').update({
+                'eod_close_price': close_price,
+                'eod_change_pct': eod_change_pct,
+                'eod_direction_held': direction_held,
+                'eod_checked_at': datetime.now(timezone.utc).isoformat(),
+            }).eq('id', h['id']).execute()
+        except Exception as e:
+            print(f"⚠️ Errore aggiornamento EOD per {ticker}: {e}")
+            continue
+
+        stats['totale'] += 1
+        stats['confermata'] += 1 if direction_held else 0
+        tipo = h.get('tipo_anomalia')
+        if tipo in per_tipo:
+            per_tipo[tipo][0] += 1
+            per_tipo[tipo][1] += 1 if direction_held else 0
+
+    if stats['totale'] == 0:
+        print("   Nessuna ipotesi con entry_price e chiusura disponibili insieme, nessuna statistica da salvare.")
+        return
+
+    pct = round(stats['confermata'] / stats['totale'] * 100)
+    print(f"   Verificate {stats['totale']} ipotesi: {stats['confermata']} hanno tenuto la direzione ({pct}%)")
+    for tipo, (tot, conf) in per_tipo.items():
+        if tot:
+            print(f"      {tipo}: {conf}/{tot} ({round(conf/tot*100)}%)")
+
+    try:
+        supabase.table('ai_watch_daily_stats').insert({
+            'stat_date': today,
+            'n_totale': stats['totale'],
+            'n_direzione_confermata': stats['confermata'],
+            'n_prezzo': per_tipo['prezzo'][0], 'n_prezzo_confermata': per_tipo['prezzo'][1],
+            'n_volume': per_tipo['volume'][0], 'n_volume_confermata': per_tipo['volume'][1],
+            'n_debole': per_tipo['debole'][0], 'n_debole_confermata': per_tipo['debole'][1],
+        }).execute()
+    except Exception as e:
+        # probabile giá presente (unique su stat_date) se il job viene rilanciato manualmente
+        print(f"⚠️ Statistiche giornaliere non salvate (probabile duplicato): {e}")
+
+    print("✅ EOD Verify completato")
+
+
+if __name__ == "__main__":
+    run_eod_verify()
