@@ -35,6 +35,16 @@ GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini
 H1_BARS_LOOKBACK = 20
 H1_MIN_BARS_FOR_BASELINE = 8
 
+# Stesse soglie esatte di modulo_h_anomaly.py (H1_VOLUME_ANOMALY_THRESHOLD,
+# H1_PRICE_ANOMALY_THRESHOLD) - servono qui per ESCLUDERE dal giudizio
+# qualitativo i ticker che le superano già entrambe: quelli sono compito di
+# H1/H2 (pipeline rigida, con target/invalidazione veri), non di questo
+# modulo. Prima di questo fix venivano inclusi comunque, causando frasi
+# contraddittorie tipo "non supera la soglia" su variazioni che la
+# superavano ampiamente (bug segnalato dall'utente il 19/09).
+H1_VOLUME_THRESHOLD = 3.0
+H1_PRICE_THRESHOLD_PCT = 1.5
+
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
@@ -95,6 +105,41 @@ def get_universe_metrics():
     return metrics
 
 
+def classify_anomaly(volume_ratio, price_change_pct):
+    """[NUOVO 19/09] Classificazione deterministica, calcolata in Python -
+    non lasciata al giudizio testuale di Gemini, per evitare che generi
+    frasi che contraddicono i numeri reali.
+    Ritorna None se il ticker supera GIA' entrambe le soglie H1 (è compito
+    di H1/H2, va escluso da questo livello qualitativo - vedi nota sopra)."""
+    vol_over = volume_ratio >= H1_VOLUME_THRESHOLD
+    price_over = abs(price_change_pct) >= H1_PRICE_THRESHOLD_PCT
+    if vol_over and price_over:
+        return None  # già di competenza H1 - non duplicare qui
+    if vol_over and not price_over:
+        return 'volume'   # volume anomalo, prezzo ancora contenuto - aspettare conferma di prezzo
+    if price_over and not vol_over:
+        return 'prezzo'   # variazione di prezzo consistente, volume ancora nella norma - aspettare conferma di volume
+    return 'debole'       # nessuno dei due sopra soglia singolarmente
+
+
+def get_active_signal(ticker):
+    """[NUOVO 19/09] Se esiste già un segnale operativo reale (Modulo E) per
+    questo ticker, ritorna i suoi livelli VERI (target/invalidazione) invece
+    di farne inventare di nuovi a Gemini in questo livello qualitativo."""
+    try:
+        rows = (supabase.table('signals_filtered')
+                .select('filtered_action,target_price,invalidation_price,timestamp')
+                .eq('ticker', ticker)
+                .neq('filtered_action', 'HOLD')
+                .order('timestamp', desc=True)
+                .limit(1)
+                .execute())
+        return rows.data[0] if rows.data else None
+    except Exception as e:
+        print(f"⚠️ Errore controllo segnale attivo per {ticker}: {e}")
+        return None
+
+
 def already_flagged_today(ticker, today):
     try:
         rows = supabase.table('ai_hypotheses').select('id').eq('ticker', ticker).eq('hypothesis_date', today).execute()
@@ -107,17 +152,26 @@ def already_flagged_today(ticker, today):
 def call_gemini_watch(metrics):
     if not GEMINI_API_KEY or not metrics:
         return []
-    lines = [f"{m['ticker']} | settore={m['sector']} | volume_ratio={m['volume_ratio']}x | var={m['price_change_pct']}%"
+    tipo_label = {'volume': 'volume anomalo, prezzo ancora contenuto',
+                  'prezzo': 'prezzo anomalo, volume ancora nella norma',
+                  'debole': 'nessuno dei due sopra soglia singolarmente'}
+    lines = [f"{m['ticker']} | settore={m['sector']} | volume_ratio={m['volume_ratio']}x | "
+             f"var={m['price_change_pct']}% | categoria=[{tipo_label[m['tipo']]}]"
              for m in metrics]
     prompt = (
         "Sei un analista che monitora un radar di anomalie di mercato ogni 15 minuti.\n"
-        "H1 (regola rigida) segnala solo se volume_ratio>=3.0 E variazione>=1.5% insieme.\n"
-        "Qui hai TUTTI i ticker con dati sufficienti, comprese le anomalie 'deboli' che H1 scarta:\n\n"
+        "H1 (regola rigida) segnala solo se volume_ratio>=3.0 E variazione>=1.5% insieme - "
+        "i ticker qui sotto NON superano già entrambe le soglie insieme (altrimenti sarebbero "
+        "già gestiti da H1), la 'categoria' indicata per ciascuno è già calcolata e corretta: "
+        "NON contraddirla e NON riscrivere se supera o non supera una soglia, usala solo come "
+        "punto di partenza per la motivazione.\n\n"
         + "\n".join(lines) +
-        "\n\nSegnala SOLO i ticker che secondo il tuo giudizio meritano attenzione "
-        "anche se non superano la soglia rigida (es. variazione consistente con volume "
-        "anche solo lievemente sopra la norma, o viceversa). Sii selettivo: se oggi non "
-        "c'è nulla di interessante, rispondi con un array vuoto - non forzare segnalazioni.\n"
+        "\n\nSegnala SOLO i ticker che secondo il tuo giudizio meritano davvero attenzione. "
+        "Sii selettivo: se oggi non c'è nulla di interessante, rispondi con un array vuoto - "
+        "non forzare segnalazioni. La motivazione deve dire COSA aspettare per una conferma "
+        "(es. 'aspettare conferma sul volume' se categoria=prezzo, o 'aspettare conferma sul "
+        "prezzo' se categoria=volume), MAI dare indicazioni di ingresso operativo (entry/stop/"
+        "target) - questo livello è solo di osservazione, non genera segnali.\n"
         "Rispondi SOLO con un array JSON, nessun altro testo:\n"
         '[{"ticker": "XXX", "livello": "alto|medio", "motivazione": "..."}]'
     )
@@ -177,6 +231,16 @@ def run_ai_watch():
         print("   Nessun ticker con dati sufficienti, uscita.")
         return
 
+    # [NUOVO 19/09] Classificazione deterministica + esclusione dei ticker
+    # che superano già entrambe le soglie H1 (competenza di H1/H2, non di
+    # questo livello qualitativo - vedi classify_anomaly()).
+    for m in metrics:
+        m['tipo'] = classify_anomaly(m['volume_ratio'], m['price_change_pct'])
+    n_escluse_h1 = sum(1 for m in metrics if m['tipo'] is None)
+    metrics = [m for m in metrics if m['tipo'] is not None]
+    if n_escluse_h1:
+        print(f"   {n_escluse_h1} ticker esclusi perché già di competenza H1 (soglie entrambe superate)")
+
     today = datetime.now(timezone.utc).date().isoformat()
     metrics = [m for m in metrics if not already_flagged_today(m['ticker'], today)]
     if not metrics:
@@ -195,16 +259,23 @@ def run_ai_watch():
         m = metrics_by_ticker.get(ticker)
         if not m:
             continue  # Gemini ha citato un ticker fuori dalla lista fornita: ignorato, mai inventare
+        active_signal = get_active_signal(ticker)
+        row = {
+            'hypothesis_date': today,
+            'ticker': ticker,
+            'motivazione': item.get('motivazione', ''),
+            'livello': item.get('livello', 'medio'),
+            'volume_ratio': m['volume_ratio'],
+            'price_change_pct': m['price_change_pct'],
+            'tipo_anomalia': m['tipo'],
+            'has_active_signal': active_signal is not None,
+            'linked_action': active_signal['filtered_action'] if active_signal else None,
+            'linked_target_price': active_signal.get('target_price') if active_signal else None,
+            'linked_invalidation_price': active_signal.get('invalidation_price') if active_signal else None,
+        }
         try:
-            supabase.table('ai_hypotheses').insert({
-                'hypothesis_date': today,
-                'ticker': ticker,
-                'motivazione': item.get('motivazione', ''),
-                'livello': item.get('livello', 'medio'),
-                'volume_ratio': m['volume_ratio'],
-                'price_change_pct': m['price_change_pct'],
-            }).execute()
-            new_items.append({**item, **m})
+            supabase.table('ai_hypotheses').insert(row).execute()
+            new_items.append({**item, **m, **row})
         except Exception as e:
             # L'unique index (ticker, hypothesis_date) fa da rete di sicurezza anti-duplicati
             print(f"⚠️ {ticker} non inserito (probabile duplicato già presente oggi): {e}")
@@ -214,12 +285,23 @@ def run_ai_watch():
         return
 
     print(f"   {len(new_items)} nuova/e ipotesi da notificare")
-    lines = [f"• *{i['ticker']}* ({i['livello']}): {i['motivazione']} "
-             f"[var {i['price_change_pct']}%, vol {i['volume_ratio']}x] "
-             f"— {DASHBOARD_BASE_URL}/grafico.php?ticker={i['ticker']}"
-             for i in new_items]
-    header = "📡 SAPTA — Ipotesi qualitativa IA (sotto soglia H1, NON una previsione):\n\n"
-    message = header + "\n".join(lines)
+    tipo_label = {'volume': 'volume↑ senza conferma di prezzo — aspetta variazione di prezzo',
+                  'prezzo': 'prezzo↑ senza conferma di volume — aspetta conferma sui volumi',
+                  'debole': 'segnale debole su entrambi i fronti'}
+    lines = []
+    for i in new_items:
+        riga = (f"👀 WATCH · *{i['ticker']}* ({tipo_label[i['tipo_anomalia']]}, livello {i['livello']})\n"
+                f"  {i['motivazione']}\n"
+                f"  var {i['price_change_pct']}% · volume {i['volume_ratio']}x")
+        if i['has_active_signal']:
+            riga += (f"\n  🟢 C'è già un segnale operativo attivo: {i['linked_action']}"
+                     f", target {i['linked_target_price']}, invalidazione {i['linked_invalidation_price']}"
+                     f" (vedi dashboard per i dettagli)")
+        riga += f"\n  {DASHBOARD_BASE_URL}/grafico.php?ticker={i['ticker']}"
+        lines.append(riga)
+    header = ("📡 SAPTA — Ipotesi qualitativa IA, solo osservazione (NON un segnale operativo, "
+               "NON una previsione - i livelli reali esistono solo se indicato 'segnale attivo'):\n\n")
+    message = header + "\n\n".join(lines)
 
     tg_ok = send_telegram(message)
     email_ok = send_email("SAPTA - Nuove ipotesi da valutare", message.replace('*', ''))
