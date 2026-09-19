@@ -86,6 +86,7 @@ $market = market_status($ticker);
     <title>SAPTA — <?= e($ticker) ?></title>
     <link rel="stylesheet" href="assets/style.css">
     <script src="assets/chart.umd.min.js"></script>
+    <script src="assets/charts.js"></script>
 </head>
 <body>
 
@@ -206,12 +207,8 @@ $market = market_status($ticker);
 
 <script>
 if (typeof Chart === 'undefined') {
-    // Chart.js non si è caricato: mostra un avviso visibile invece di una pagina bianca silenziosa
-    ['dailyChartError', 'monthlyChartError', 'weeklyChartError', 'intradayChartError'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = 'block';
-    });
-} else {
+    showChartErrors(['dailyChartError', 'monthlyChartError', 'weeklyChartError', 'intradayChartError']);
+}
 
 const dailyLabels = <?= json_encode($daily_labels) ?>;
 const dailyValues = <?= json_encode($daily_values) ?>;
@@ -312,8 +309,6 @@ buildChart('dailyChart', dailyLabels, dailyValues, '#4f46e5', 'rgba(79,70,229,0.
 buildChart('monthlyChart', monthlyLabels, monthlyValues, '#0891b2', 'rgba(8,145,178,0.08)', 'Prezzo close', null, null);
 buildChart('weeklyChart', weeklyLabels, weeklyValues, '#ea580c', 'rgba(234,88,12,0.08)', 'Prezzo close (15m)', null, null);
 buildChart('intradayChart', intradayLabels, intradayValues, '#7c3aed', 'rgba(124,58,237,0.08)', 'Prezzo close (15m)', null, null);
-
-} // fine controllo Chart.js disponibile
 </script>
 
 <footer>SAPTA · <?= e($ticker) ?> · Pagina generata <?= date('d/m/Y H:i') ?></footer>
