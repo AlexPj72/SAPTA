@@ -328,6 +328,37 @@ Inoltre, in questa sessione:
   guidata per singolo titolo; (3) cruscotto paper trading con curva P&L nel
   tempo; (4) filtro mercato/settore (rimandato, più corposo).
 
+## 0octies. Novità sessione 19/09 (parte 2) — Punto 2: vista guidata
+
+- **Nuova pagina `dashboard/today.php` ("Da valutare oggi")**: raccoglie in
+  un'unica lista, ordinata per orario, sia i segnali operativi reali
+  (Modulo E, `signals_filtered` di oggi) sia le ipotesi AI Watch appena
+  confermate (`ai_hypotheses.status='confermato'` di oggi) - nient'altro,
+  per non ricreare il rumore delle mail con 25 titoli equivalenti. Ogni
+  riga ha un solo pulsante "Valuta →".
+- **Nuova pagina `dashboard/valuta.php` (decisione guidata per singolo
+  titolo)**: in sequenza - grafico (storico 60gg + sessione di oggi, ridotto
+  rispetto a `grafico.php` per restare leggero, con link al grafico
+  completo), perché è stato segnalato (`spiega_segnale()` se è un segnale
+  reale, motivazione + stato di conferma se è un'ipotesi), rischio di
+  portafoglio se già calcolato (altrimenti dichiara esplicitamente che non
+  è stato calcolato, per non lasciar intendere una copertura che non c'è),
+  form di registrazione decisione che invia direttamente a `decisions.php`
+  (riusa la logica già esistente, nessuna duplicazione).
+- **Refactor**: estratte le funzioni Chart.js condivise (`buildChart`,
+  `sparseTicks`, `eurTick`, `showChartErrors`) in `dashboard/assets/charts.js`,
+  riusato sia da `grafico.php` che da `valuta.php` - during l'estrazione
+  corretto anche un bug potenziale (accesso a `Chart.defaults` senza guardia,
+  che avrebbe rotto la definizione delle funzioni successive se Chart.js
+  non fosse disponibile).
+- Nuova voce di navigazione "🎯 Da valutare" (today.php), aggiunta subito
+  dopo Dashboard in tutte le pagine.
+- Testato in locale (today.php con mix segnali/ipotesi, valuta.php con
+  segnale/con sola ipotesi/senza nulla/senza ticker): un warning trovato e
+  corretto (`checked_count` non garantito), tutto il resto pulito.
+- **Prossimi punti**: (3) cruscotto paper trading con curva P&L nel tempo;
+  (4) filtro mercato/settore (rimandato, più corposo).
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
