@@ -228,3 +228,22 @@ Confermato funzionante in produzione: primo alert email reale ricevuto (5 ipotes
 Iniziare a registrare vere decisioni di paper trading, ora che il flusso dati è regolare - primo passo concreto verso la validazione operativa già indicata come priorità nei documenti precedenti.
 
 ---
+
+## Sessione 19/09/2026 – Claude: Punto 1 di 4, Modulo EOD Verify
+
+### Contesto
+L'utente ha portato un'analisi di ChatGPT che confronta manualmente gli alert AI Watch del 18/09 con le chiusure reali (fonte stockanalysis.com/Reuters), concludendo che la combinazione prezzo+volume era il vero segnale operativo. Concordati 4 punti di miglioramento con l'utente, da fare uno alla volta con consegna di file/doc ad ogni punto. Questo è il punto 1.
+
+### Modifiche effettuate da Claude
+- `src/modulo_ai_watch.py`: aggiunto campo `entry_price` (prezzo assoluto al momento dell'alert) alle metriche e alla riga salvata su `ai_hypotheses` - serve al nuovo modulo per calcolare la variazione reale a chiusura.
+- Nuovo `src/modulo_eod_verify.py`, agganciato a `sapta_us_close.yml` (21:30 UTC): confronta ogni ipotesi del giorno con la chiusura reale, calcola `eod_direction_held` e aggrega su nuova tabella `ai_watch_daily_stats` (breakdown per tipo_anomalia). Automatizza il controllo che ChatGPT ha fatto a mano.
+- `dashboard/index.php`: KPI "Affidabilità AI Watch" + colonna "Esito EOD" nella tabella Ipotesi IA.
+- **Commit:** modulo_ai_watch.py (06a11ed18f), modulo_eod_verify.py (23edc5f6aa), sapta_us_close.yml (b4c0c142ca), dashboard/index.php (8eeab985ce).
+- Testato in locale con dati finti: 3 casi (confermato/invertito/senza entry_price) tutti corretti.
+
+### Prossimi punti (concordati, uno alla volta)
+2. Vista unica "Da valutare oggi" + pagina di decisione guidata per singolo titolo
+3. Cruscotto paper trading con curva P&L nel tempo
+4. Filtro mercato/settore (rimandato, più corposo)
+
+---
