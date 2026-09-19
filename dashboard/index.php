@@ -24,6 +24,10 @@ foreach ($signals as $s) {
     $cid = $s['screening_candidate_id'] ?? null;
 }
 
+// [NUOVO 19/09] Affidabilità AI Watch — ultime statistiche disponibili (Modulo EOD Verify)
+$eod_stats_rows = supabase_query('ai_watch_daily_stats', ['select' => '*', 'order' => 'stat_date.desc', 'limit' => 1]);
+$eod_stats = $eod_stats_rows[0] ?? null;
+
 // Capitale corrente
 $capital_history = supabase_query('capital_state', [
     'select' => 'capital_eur,created_at',
@@ -86,6 +90,13 @@ $n_candidates_today = count($candidates);
         <div class="stat-value"><?= $n_candidates_today ?></div>
         <div class="stat-sub"><a href="anomalies.php">vedi radar →</a></div>
     </div>
+    <?php if ($eod_stats): ?>
+    <div class="stat-card <?= $eod_stats['n_direzione_confermata'] >= $eod_stats['n_totale'] / 2 ? 'good' : 'warn' ?>">
+        <div class="stat-label">Affidabilità AI Watch</div>
+        <div class="stat-value"><?= round($eod_stats['n_direzione_confermata'] / max(1, $eod_stats['n_totale']) * 100) ?>%</div>
+        <div class="stat-sub"><?= $eod_stats['n_direzione_confermata'] ?>/<?= $eod_stats['n_totale'] ?> direzione tenuta (<?= e(date('d/m', strtotime($eod_stats['stat_date']))) ?>)</div>
+    </div>
+    <?php endif; ?>
 </div>
 
 <?php render_nav('index.php'); ?>
@@ -170,7 +181,7 @@ $n_candidates_today = count($candidates);
     <?php else: ?>
     <div class="table-wrap">
     <table>
-        <thead><tr><th>Ora</th><th>Ticker</th><th>Tipo</th><th>Stato</th><th>Livello</th><th>Motivazione</th><th>Var.</th><th>Volume</th><th>Segnale</th><th>Alert</th></tr></thead>
+        <thead><tr><th>Ora</th><th>Ticker</th><th>Tipo</th><th>Stato</th><th>Livello</th><th>Motivazione</th><th>Var.</th><th>Volume</th><th>Esito EOD</th><th>Segnale</th><th>Alert</th></tr></thead>
         <tbody>
         <?php foreach ($hypotheses as $h): ?>
         <tr>
@@ -188,6 +199,14 @@ $n_candidates_today = count($candidates);
             <td style="white-space:normal; max-width:340px;"><?= e($h['motivazione']) ?></td>
             <td class="<?= ($h['price_change_pct'] ?? 0) >= 0 ? 'positive' : 'negative' ?>"><?= number_format($h['price_change_pct'], 2) ?>%</td>
             <td><?= number_format($h['volume_ratio'], 1) ?>x</td>
+            <td>
+                <?php if (isset($h['eod_direction_held']) && $h['eod_direction_held'] !== null): ?>
+                    <span class="badge <?= $h['eod_direction_held'] ? 'approved' : 'rejected' ?>">
+                        <?= $h['eod_direction_held'] ? '✅ tenuta' : '❌ invertita' ?>
+                    </span>
+                    <br><small class="muted">chiusura <?= number_format($h['eod_change_pct'] ?? 0, 2) ?>%</small>
+                <?php else: ?><span class="muted">in corso</span><?php endif; ?>
+            </td>
             <td><?php if (!empty($h['has_active_signal'])): ?>
                 <span class="badge approved">🟢 <?= e($h['linked_action']) ?></span>
                 <br><small class="muted">T <?= number_format($h['linked_target_price'] ?? 0, 2) ?> / I <?= number_format($h['linked_invalidation_price'] ?? 0, 2) ?></small>
