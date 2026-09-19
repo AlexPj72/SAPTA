@@ -125,6 +125,7 @@ def get_universe_metrics():
             'sector': sector_map.get(t, '—'),
             'volume_ratio': round(volume_ratio, 2),
             'price_change_pct': round(price_change_pct, 2),
+            'last_price': last_bar['close'],  # [NUOVO 19/09] prezzo assoluto al momento dell'alert, serve al Modulo EOD Verify
         })
     return metrics
 
@@ -365,6 +366,7 @@ def run_ai_watch():
                     'livello': item.get('livello', 'medio'),
                     'volume_ratio': m['volume_ratio'],
                     'price_change_pct': m['price_change_pct'],
+                    'entry_price': m['last_price'],
                     'tipo_anomalia': m['tipo'],
                     'has_active_signal': active_signal is not None,
                     'linked_action': active_signal['filtered_action'] if active_signal else None,
