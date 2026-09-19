@@ -206,3 +206,25 @@ L'utente ha passato a Claude un documento unificato (ChatGPT) che integra handof
 - Tool layer esteso a fonti esterne (premarket data provider, futures) — non disponibili nello stack attuale (yfinance/NewsAPI free non li coprono bene), da valutare se e quando serve davvero.
 
 ---
+
+## Sessione 18/09/2026 (parte 2) – Claude: grafici estesi + fix critico affidabilità pipeline
+
+### Modifiche dashboard
+- `grafico.php`: aggiunti trend mensile (30gg) e settimanale (5gg, dettaglio 15m); intraday ora filtrato alla sola sessione corrente; bandiera mercato + stato aperto/chiuso indicativo nell'header.
+- `universo.php` + `helpers.php`: bandiera mercato (🇺🇸/🇮🇹) per ogni ticker, filtro "Solo USA"/"Solo Italia".
+- **Commit:** dashboard/grafico.php, dashboard/helpers.php, dashboard/universo.php.
+
+### Fix critico: affidabilità del cron GitHub Actions
+Diagnosi: il cron interno `*/15 9-17 * * 1-5` di `sapta_fast.yml` girava solo 1-2 volte/giorno invece delle ~33 attese - limite noto di GitHub Actions sui cron molto frequenti. Causa radice retroattiva di gran parte dei problemi di dati scarsi delle sessioni precedenti.
+
+Fix: token GitHub fine-grained (repo SAPTA, Actions:write, scadenza 17/12/2026) + cronjob esterno su cron-job.org (ogni 15 min, 9-22 UTC Lun-Ven) che chiama l'API `workflow_dispatch` per forzare l'esecuzione dall'esterno. Verificato e confermato funzionante in produzione dall'utente (grafico intraday ora si popola correttamente).
+
+**Nuova dipendenza esterna da monitorare**: cron-job.org + token con scadenza 90gg (GitHub avvisa via email prima della scadenza, ma va comunque rinnovato manualmente quando arriva l'avviso).
+
+### Stato Modulo AI Watch
+Confermato funzionante in produzione: primo alert email reale ricevuto (5 ipotesi su titoli italiani). Telegram confermato funzionante dopo una verifica iniziale.
+
+### Prossimo passo indicato all'utente
+Iniziare a registrare vere decisioni di paper trading, ora che il flusso dati è regolare - primo passo concreto verso la validazione operativa già indicata come priorità nei documenti precedenti.
+
+---
