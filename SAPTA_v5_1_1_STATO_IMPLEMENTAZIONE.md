@@ -248,6 +248,52 @@ Inoltre, in questa sessione:
   Telegram/SMTP live non è testabile senza credenziali - da verificare al
   primo giorno di mercato aperto con i secret configurati.
 
+## 0sexies. Novità sessione 18/09 (parte 2 - riepilogo)
+
+- **Grafici**: aggiunti trend mensile (30gg) e trend settimanale (ultimi 5
+  giorni di mercato, dettaglio 15m) in `grafico.php` - ora 4 grafici totali
+  insieme a storico 120gg e intraday sessione corrente (quest'ultimo ora
+  filtrato per mostrare solo l'ultima sessione, non un mix di più giorni).
+  Aggiunta bandiera mercato (🇺🇸/🇮🇹 - l'universo copre solo USA e Milano,
+  nessun titolo di Londra) e indicatore aperto/chiuso indicativo. Aggiunto
+  filtro "Solo USA"/"Solo Italia" in `universo.php`.
+
+- **[CRITICO] Trovata e risolta la causa radice di gran parte dei problemi
+  di dati scarsi visti nelle sessioni precedenti**: il cron interno di
+  GitHub Actions (`*/15 9-17 * * 1-5` in `sapta_fast.yml`) non veniva quasi
+  mai onorato - verificato che negli ultimi giorni il workflow girava solo
+  1-2 volte al giorno invece delle ~33 attese. È un limite noto e
+  documentato di GitHub Actions: i cron molto frequenti (ogni 15 min)
+  possono essere ritardati o saltati, specialmente su repository a bassa
+  attività. Questo spiega retroattivamente: dati intraday sempre scarsi,
+  `screening_candidates` quasi sempre vuota, grafico 15 min che mostrava
+  solo apertura/chiusura del giorno prima.
+  **Fix**: creato un token GitHub fine-grained (solo repo SAPTA, permesso
+  Actions: Read and write, scadenza 2026-12-17 - GitHub avvisa via email
+  prima della scadenza) e un cronjob esterno su **cron-job.org** che ogni
+  15 minuti (9:00-22:00 UTC Lun-Ven, finestra estesa per coprire sia
+  l'apertura di Milano che la chiusura di Wall Street) chiama
+  `POST /repos/AlexPj72/SAPTA/actions/workflows/sapta_fast.yml/dispatches`
+  per forzare l'esecuzione dall'esterno invece di affidarsi al cron interno.
+  Verificato funzionante (risposta 204) e confermato dall'utente in serata:
+  il grafico intraday ora si popola correttamente con dati della sessione
+  reale. **Dipendenza nuova da tenere a mente**: la pipeline "fast" ora
+  dipende da un servizio esterno (cron-job.org) e da un token con scadenza
+  a 90 giorni - se il token scade senza essere rinnovato, la pipeline torna
+  silenziosamente al comportamento sporadico del cron interno di GitHub
+  (che resta comunque presente come schedule di backup in `sapta_fast.yml`,
+  solo inaffidabile in frequenza).
+
+- **Modulo AI Watch confermato funzionante in produzione**: primo alert
+  email reale ricevuto con 5 ipotesi su titoli italiani (DIA.MI, BC.MI,
+  IRE.MI, PST.MI, MONC.MI). Telegram inizialmente silente, poi confermato
+  funzionante dall'utente.
+
+- **Prossimo passo suggerito**: iniziare a registrare vere decisioni di
+  paper trading (`decisions.php`) nei prossimi giorni di mercato, ora che
+  il flusso dati è finalmente regolare - punto di partenza concreto per la
+  validazione più volte indicata come priorità nei documenti di progetto.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
