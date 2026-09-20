@@ -70,6 +70,7 @@ $relevant_index_label = $is_it ? 'FTSE MIB' : 'S&amp;P 500';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SAPTA — Valuta <?= e($ticker) ?></title>
+    <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
     <script src="assets/chart.umd.min.js"></script>
     <script src="assets/charts.js"></script>
