@@ -39,6 +39,9 @@ foreach ($confirmed_hyp as $h) {
     ];
 }
 usort($items, fn($a, $b) => strtotime($b['ts']) <=> strtotime($a['ts']));
+
+// [NUOVO 19/09 - Punto 4] Contesto di mercato generale
+$market = get_market_direction_dashboard();
 ?>
 <!DOCTYPE html>
 <html lang="it">
@@ -65,6 +68,10 @@ usort($items, fn($a, $b) => strtotime($b['ts']) <=> strtotime($a['ts']));
 <?php render_nav('today.php'); ?>
 
 <div class="wrap">
+
+<section style="padding: 12px 24px;">
+    <span class="legend">📊 Contesto di mercato oggi — <?= market_direction_badge($market['usa'], 'S&amp;P 500 (USA)') ?> · <?= market_direction_badge($market['italia'], 'FTSE MIB (Italia)') ?></span>
+</section>
 
 <section>
     <div class="section-head">
