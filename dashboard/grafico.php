@@ -84,6 +84,7 @@ $market = market_status($ticker);
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="refresh" content="900">
     <title>SAPTA — <?= e($ticker) ?></title>
+    <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
     <script src="assets/chart.umd.min.js"></script>
     <script src="assets/charts.js"></script>
