@@ -10,6 +10,7 @@ $raw_signals = supabase_query('signals_raw', ['select' => '*', 'order' => 'times
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SAPTA — Segnali grezzi</title>
+    <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
