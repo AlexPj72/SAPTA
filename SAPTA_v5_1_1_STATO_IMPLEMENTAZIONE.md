@@ -381,6 +381,43 @@ Inoltre, in questa sessione:
   più corposo, richiede una fonte dati nuova (indice di mercato tipo
   SPY/FTSE MIB) non ancora presente nello stack.
 
+## 0decies. Novità sessione 19/09 (parte 4) — Punto 4: filtro mercato/settore
+
+- **Correzione a quanto detto in precedenza**: la parte "settore" NON
+  richiede una fonte dati nuova - si calcola aggregando i dati che già
+  abbiamo (media della variazione odierna degli altri titoli dello stesso
+  settore). Serve una fonte dati nuova solo per il mercato generale.
+- **`src/modulo_a_ingestion.py`**: aggiunta ingestione di 2 indici di
+  riferimento (`INDEX_TICKERS = ['^GSPC', 'FTSEMIB.MI']` - S&P 500, FTSE
+  MIB), scritti in `prezzi` come ticker normali ma esclusi da `TICKERS`
+  (quindi mai coinvolti in H1/H2/screening). Simboli Yahoo Finance standard
+  - **da verificare nei log al primo run reale**: se uno dei due risulta
+  vuoto, il simbolo va corretto.
+- **Nuovo `src/market_context.py`**: `get_market_direction()` (variazione
+  giornaliera S&P 500/FTSE MIB) e `get_sector_strength()` (media della
+  variazione degli ALTRI titoli dello stesso settore, ticker stesso
+  escluso). Entrambe fail-open.
+- **`src/modulo_ai_watch.py`**: il prompt Gemini ora include il contesto di
+  mercato e di settore per ogni ticker - un movimento IN CONTROTENDENZA
+  rispetto al mercato generale o molto più forte della media del proprio
+  settore viene esplicitamente segnalato come meritevole di più attenzione
+  (risposta diretta all'osservazione dell'utente su NFLX/VZ e sulla
+  giornata mista del 18/09).
+- **Dashboard**: banner "Contesto di mercato oggi" in `today.php`
+  (S&P 500/FTSE MIB), e in `valuta.php` un confronto esplicito
+  "in linea con il mercato" / "⚠️ in controtendenza" per il titolo in
+  esame. Stessa logica di calcolo duplicata in PHP
+  (`get_market_direction_dashboard()` in `helpers.php`) perché legge dalla
+  stessa tabella `prezzi`, non serve condividere codice tra Python e PHP.
+- Testato: `get_market_direction()` (Python) e la sua controparte PHP
+  verificate con mock dedicati e precisi (+0.5% USA, -0.33% Italia,
+  calcolo esatto); `get_sector_strength()` verificata esclude
+  correttamente il ticker stesso dalla media (bug trovato e corretto
+  durante lo sviluppo: la prima versione lo includeva, contraddicendo la
+  propria docstring).
+- **Con questo si chiudono tutti e 4 i punti concordati con l'utente il
+  19/09** a partire dall'analisi ChatGPT sulle mail del 18/09.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
