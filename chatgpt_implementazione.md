@@ -263,3 +263,17 @@ L'utente ha portato un'analisi di ChatGPT che confronta manualmente gli alert AI
 4. Filtro mercato/settore (rimandato)
 
 ---
+
+## Sessione 19/09/2026 (parte 3) – Claude: Punto 3 di 4, cruscotto paper trading nel tempo
+
+### Modifiche effettuate da Claude
+- `dashboard/decisions.php`: nuova sezione "Andamento nel tempo" con curva P&L cumulato e win rate cumulato (Chart.js, tutto lo storico chiuso, non solo ultime 15).
+- Fix bug minore: KPI P&L totale/win rate erano calcolati solo sulle ultime 15 chiuse, ora su tutto lo storico.
+- `dashboard/assets/charts.js`: `buildChart()` accetta ora un parametro `unit` ('eur' default o 'pct') per grafici percentuali.
+- **Commit:** dashboard/decisions.php (776164843d), dashboard/assets/charts.js (bfdeb73459).
+- Testato in locale con 3 posizioni chiuse: curva e KPI corretti, nessun warning.
+
+### Prossimo e ultimo punto
+4. Filtro mercato/settore (rimandato - richiede una fonte dati nuova, indice di mercato tipo SPY/FTSE MIB, non presente nello stack attuale)
+
+---
