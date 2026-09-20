@@ -51,11 +51,18 @@ $intraday = array_reverse($intraday);
 
 $daily_labels = array_map(fn($d) => date('d/m', strtotime($d['timestamp'])), $daily);
 $daily_values = array_map(fn($d) => (float) $d['close'], $daily);
+$last_close = !empty($daily) ? (float) end($daily)['close'] : null;
+$prev_close = count($daily) > 1 ? (float) $daily[count($daily) - 2]['close'] : null;
+$change_pct = ($last_close !== null && $prev_close) ? (($last_close / $prev_close - 1) * 100) : null;
 $intraday_labels = array_map(fn($d) => date('H:i', strtotime($d['timestamp'])), $intraday);
 $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
 $target_price = $signal['target_price'] ?? null;
 $invalidation_price = $signal['invalidation_price'] ?? null;
 $market = market_status($ticker);
+$market_direction = get_market_direction_dashboard();
+$is_it = str_ends_with($ticker, '.MI');
+$relevant_index_pct = $is_it ? $market_direction['italia'] : $market_direction['usa'];
+$relevant_index_label = $is_it ? 'FTSE MIB' : 'S&amp;P 500';
 ?>
 <!DOCTYPE html>
 <html lang="it">
@@ -109,6 +116,12 @@ $market = market_status($ticker);
 
 <section>
     <h2>Perché è stato segnalato</h2>
+    <?php if ($relevant_index_pct !== null && $last_close !== null && $change_pct !== null): ?>
+    <p class="muted" style="margin-bottom:10px;">
+        Contesto: <?= $relevant_index_label ?> oggi <?= market_direction_badge($relevant_index_pct, '') ?> ·
+        <?= e($ticker) ?> <?= (($change_pct >= 0) === ($relevant_index_pct >= 0)) ? 'in linea con il mercato' : '⚠️ in controtendenza rispetto al mercato' ?>
+    </p>
+    <?php endif; ?>
     <?php if ($signal): ?>
         <div class="explain" style="max-width:none;"><?= spiega_segnale($signal, $candidate) ?></div>
     <?php elseif ($hypothesis): ?>
