@@ -53,6 +53,7 @@ $visible_history = count($_SESSION['chat_history']) > 2 ? array_slice($_SESSION[
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SAPTA — Chat AI</title>
+    <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
     <style>
         .chat-box { display: flex; flex-direction: column; gap: 12px; max-height: 55vh; overflow-y: auto; padding: 4px 2px 10px; }
