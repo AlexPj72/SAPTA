@@ -76,13 +76,31 @@ if ($prefill_signal_id !== '') {
     }
 }
 
+// [NUOVO 19/09] Storico completo delle chiuse, in ordine cronologico - serve
+// sia per la curva P&L/win-rate nel tempo sia per calcolare i KPI su TUTTO
+// lo storico invece che solo sulle ultime 15 (fix di un bug minore: prima
+// pnl_totale/win_rate erano calcolati solo sulle ultime 15 chiuse, non sul
+// vero totale).
+$all_closed = supabase_query('human_decisions', ['select' => '*', 'close_price' => 'not.is.null', 'order' => 'close_timestamp.asc', 'limit' => 500]);
+$closed_positions = array_reverse(array_slice($all_closed, -15)); // ultime 15, più recenti prima, per la tabella
+
 $open_positions = supabase_query('human_decisions', ['select' => '*', 'close_price' => 'is.null', 'order' => 'timestamp_decision.desc']);
-$closed_positions = supabase_query('human_decisions', ['select' => '*', 'close_price' => 'not.is.null', 'order' => 'close_timestamp.desc', 'limit' => 15]);
 
 $n_open = count($open_positions);
-$n_closed = count($closed_positions);
-$pnl_totale = array_sum(array_map(fn($p) => (float) ($p['pnl_eur'] ?? 0), $closed_positions));
-$win_count = count(array_filter($closed_positions, fn($p) => ($p['pnl_eur'] ?? 0) > 0));
+$n_closed = count($all_closed);
+$pnl_totale = array_sum(array_map(fn($p) => (float) ($p['pnl_eur'] ?? 0), $all_closed));
+$win_count = count(array_filter($all_closed, fn($p) => ($p['pnl_eur'] ?? 0) > 0));
+
+// Curva P&L cumulato + win rate cumulato, un punto per ogni posizione chiusa in ordine cronologico
+$curve_labels = []; $pnl_curve = []; $winrate_curve = [];
+$running_pnl = 0.0; $running_wins = 0;
+foreach ($all_closed as $i => $p) {
+    $running_pnl += (float) ($p['pnl_eur'] ?? 0);
+    $running_wins += (($p['pnl_eur'] ?? 0) > 0) ? 1 : 0;
+    $curve_labels[] = date('d/m', strtotime($p['close_timestamp']));
+    $pnl_curve[] = round($running_pnl, 2);
+    $winrate_curve[] = round($running_wins / ($i + 1) * 100, 1);
+}
 ?>
 <!DOCTYPE html>
 <html lang="it">
@@ -91,6 +109,8 @@ $win_count = count(array_filter($closed_positions, fn($p) => ($p['pnl_eur'] ?? 0
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SAPTA — Paper Trading</title>
     <link rel="stylesheet" href="assets/style.css">
+    <script src="assets/chart.umd.min.js"></script>
+    <script src="assets/charts.js"></script>
 </head>
 <body>
 
@@ -128,6 +148,30 @@ $win_count = count(array_filter($closed_positions, fn($p) => ($p['pnl_eur'] ?? 0
 <?php render_nav('decisions.php'); ?>
 
 <div class="wrap">
+
+<?php if ($n_closed >= 2): ?>
+<section class="chart-card">
+    <div class="section-head">
+        <div><h2>Andamento nel tempo</h2><p class="muted">Curva P&amp;L cumulato e win rate su tutte le <?= $n_closed ?> posizioni chiuse — non solo il totale attuale.</p></div>
+    </div>
+    <div class="chart-wrap" style="height:260px;"><canvas id="pnlCurveChart"></canvas></div>
+    <div id="pnlCurveChartError" class="chart-error" style="display:none; margin-top:10px;">⚠️ Grafico non caricato.</div>
+    <div class="chart-legend-row"><span><i style="background:#4f46e5"></i> P&amp;L cumulato (€)</span></div>
+
+    <div class="chart-wrap" style="height:200px; margin-top:20px;"><canvas id="winrateCurveChart"></canvas></div>
+    <div id="winrateCurveChartError" class="chart-error" style="display:none; margin-top:10px;">⚠️ Grafico non caricato.</div>
+    <div class="chart-legend-row"><span><i style="background:#16a34a"></i> Win rate cumulato (%)</span></div>
+</section>
+<script>
+if (typeof Chart === 'undefined') { showChartErrors(['pnlCurveChartError', 'winrateCurveChartError']); }
+buildChart('pnlCurveChart', <?= json_encode($curve_labels) ?>, <?= json_encode($pnl_curve) ?>, '#4f46e5', 'rgba(79,70,229,0.08)', 'P&L cumulato', null, null);
+buildChart('winrateCurveChart', <?= json_encode($curve_labels) ?>, <?= json_encode($winrate_curve) ?>, '#16a34a', 'rgba(22,163,74,0.08)', 'Win rate cumulato', null, null, 'pct');
+</script>
+<?php else: ?>
+<section>
+    <p class="muted">La curva P&amp;L nel tempo compare da almeno 2 posizioni chiuse — registrane qualcuna per iniziare a vederla.</p>
+</section>
+<?php endif; ?>
 
 <section>
     <h2>Come funziona, passo dopo passo</h2>
