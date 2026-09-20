@@ -277,3 +277,22 @@ L'utente ha portato un'analisi di ChatGPT che confronta manualmente gli alert AI
 4. Filtro mercato/settore (rimandato - richiede una fonte dati nuova, indice di mercato tipo SPY/FTSE MIB, non presente nello stack attuale)
 
 ---
+
+## Sessione 19/09/2026 (parte 4) – Claude: Punto 4 di 4, filtro mercato/settore
+
+### Correzione a quanto detto in precedenza
+La parte "settore" non serve una fonte dati nuova - si calcola da dati già presenti (media variazione altri titoli stesso settore). Serve una fonte nuova solo per il mercato generale (indici).
+
+### Modifiche effettuate da Claude
+- `src/modulo_a_ingestion.py`: ingestione di 2 indici (`^GSPC` S&P 500, `FTSEMIB.MI` FTSE MIB), esclusi da `TICKERS`/screening.
+- Nuovo `src/market_context.py`: `get_market_direction()`, `get_sector_strength()` (fail-open).
+- `src/modulo_ai_watch.py`: prompt Gemini ora considera contesto mercato/settore (in linea vs controtendenza) - risposta diretta all'osservazione dell'utente su NFLX/VZ.
+- Dashboard: banner mercato in `today.php`, confronto titolo-vs-mercato in `valuta.php`, `get_market_direction_dashboard()` in `helpers.php`.
+- **Commit:** modulo_a_ingestion.py (cf2f27ad32), market_context.py (435a260519), modulo_ai_watch.py (d00faf8d9b), dashboard/helpers.php (304ee1dc4d), dashboard/today.php (724266f813), dashboard/valuta.php (5793f2c774).
+- Bug trovato e corretto durante lo sviluppo: `get_sector_strength()` non escludeva il ticker stesso dalla media (contraddiceva la propria docstring).
+- **Da verificare al primo run reale**: simboli Yahoo Finance degli indici (se uno risulta vuoto nei log, va corretto).
+
+### Chiusura dei 4 punti
+Con questo si chiudono tutti e 4 i punti concordati con l'utente il 19/09 a partire dall'analisi ChatGPT sulle mail del 18/09 (verifica esiti automatica, vista/decisione guidata, cruscotto paper trading nel tempo, filtro mercato/settore).
+
+---
