@@ -156,6 +156,38 @@ function spiega_segnale($signal, $candidate = null) {
 }
 
 /**
+ * [NUOVO 19/09 - Punto 4] Versione PHP dello stesso calcolo di
+ * src/market_context.py::get_market_direction() - letto qui via Supabase
+ * invece che duplicare la scrittura, entrambi leggono la stessa tabella
+ * 'prezzi' popolata da modulo_a_ingestion.py (ticker '^GSPC'/'FTSEMIB.MI').
+ */
+function get_market_direction_dashboard() {
+    $result = ['usa' => null, 'italia' => null];
+    $index_map = ['^GSPC' => 'usa', 'FTSEMIB.MI' => 'italia'];
+    foreach ($index_map as $ticker => $key) {
+        $rows = supabase_query('prezzi', [
+            'select' => 'close,timestamp', 'ticker' => 'eq.' . $ticker, 'interval' => 'eq.15m',
+            'order' => 'timestamp.desc', 'limit' => 40,
+        ]);
+        if (count($rows) < 2) continue;
+        $last_date = substr($rows[0]['timestamp'], 0, 10);
+        $same_day = array_values(array_filter($rows, fn($r) => substr($r['timestamp'], 0, 10) === $last_date));
+        if (count($same_day) < 2) continue;
+        $latest = (float) $same_day[0]['close'];
+        $first = (float) end($same_day)['close'];
+        $result[$key] = round(($latest / $first - 1) * 100, 2);
+    }
+    return $result;
+}
+
+function market_direction_badge($pct, $label) {
+    if ($pct === null) return "<span class=\"muted\">$label: dato non disponibile</span>";
+    $cls = $pct > 0.15 ? 'positive' : ($pct < -0.15 ? 'negative' : 'muted');
+    $sign = $pct >= 0 ? '+' : '';
+    return "<span class=\"$cls\">$label: {$sign}{$pct}%</span>";
+}
+
+/**
  * [NUOVO 18/09] Bandiera del mercato di un ticker. Universo SAPTA copre
  * solo USA (nessun suffisso) e Italia/Milano (suffisso .MI) - nessun
  * titolo di Londra o altre piazze europee al momento, quindi solo 2 casi.
