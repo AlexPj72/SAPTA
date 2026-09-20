@@ -25,6 +25,15 @@ from universe import get_universe
 # con lo stesso working directory di config.py).
 TICKERS = get_universe()
 
+# [NUOVO 19/09 - Punto 4 filtro mercato] Indici di riferimento per il
+# contesto di mercato generale (usati da modulo_ai_watch.py per capire se
+# un titolo si muove CON o CONTRO il mercato/piazza di appartenenza).
+# Scritti in 'prezzi' come ticker normali, ma NON fanno parte di TICKERS
+# quindi non entrano mai nello screening H1/H2 (get_universe() non li
+# include). Simboli standard Yahoo Finance - da verificare al primo run
+# reale nei log (se uno dei due risulta vuoto, il simbolo va corretto).
+INDEX_TICKERS = ['^GSPC', 'FTSEMIB.MI']  # S&P 500 (USA), FTSE MIB (Italia)
+
 # [NUOVO v5.1] Soglia oltre la quale un dato viene marcato 'stale'.
 # Il ciclo di ingestion gira ogni 15 minuti: un dato con timestamp più
 # vecchio di questa soglia indica probabilmente un problema a monte
@@ -184,3 +193,14 @@ if __name__ == "__main__":
 
     records = reconcile_prices(yf_data, fh_data, TICKERS)
     write_to_supabase(records)
+
+    # [NUOVO 19/09] Indici di mercato - stessa pipeline, nessun cross-check
+    # Finnhub (non li copre), fail-open: se un simbolo non risponde, gli
+    # altri ticker dell'universo non ne risentono (già scritti sopra).
+    print(f"📈 Indici di contesto: {INDEX_TICKERS}")
+    try:
+        index_yf_data = fetch_yfinance(INDEX_TICKERS)
+        index_records = reconcile_prices(index_yf_data, {}, INDEX_TICKERS)
+        write_to_supabase(index_records)
+    except Exception as e:
+        print(f"⚠️ Errore ingestion indici di mercato (non bloccante): {e}")
