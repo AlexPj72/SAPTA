@@ -50,6 +50,7 @@ $market = get_market_direction_dashboard();
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="refresh" content="900">
     <title>SAPTA — Da valutare oggi</title>
+    <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
