@@ -10,6 +10,7 @@ $candidates = supabase_query('screening_candidates', ['select' => '*', 'order' =
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SAPTA — Radar anomalie</title>
+    <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
