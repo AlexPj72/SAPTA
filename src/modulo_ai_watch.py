@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 import requests
 from config import supabase, GEMINI_API_KEY
 from universe import get_universe
+from market_context import get_market_direction, market_direction_label, get_sector_strength
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
 H1_BARS_LOOKBACK = 20
@@ -252,16 +253,40 @@ def call_gemini_watch(metrics):
     tipo_label = {'volume': 'volume anomalo, prezzo ancora contenuto',
                   'prezzo': 'prezzo anomalo, volume ancora nella norma',
                   'debole': 'nessuno dei due sopra soglia singolarmente'}
-    lines = [f"{m['ticker']} | settore={m['sector']} | volume_ratio={m['volume_ratio']}x | "
-             f"var={m['price_change_pct']}% | categoria=[{tipo_label[m['tipo']]}]"
-             for m in metrics]
+
+    # [NUOVO 19/09 - Punto 4] Contesto di mercato (indici) e di settore
+    # (forza relativa vs gli altri titoli dello stesso settore in questo
+    # stesso giro) - risponde all'osservazione dell'utente su NFLX vs VZ:
+    # un movimento va giudicato anche rispetto a cosa fa il mercato/settore.
+    market = get_market_direction()
+    market_txt = (f"Mercato USA (S&P 500) oggi: {market_direction_label(market['usa'])}. "
+                  f"Mercato Italia (FTSE MIB) oggi: {market_direction_label(market['italia'])}.")
+
+    lines = []
+    for m in metrics:
+        sector_avg = get_sector_strength(m['sector'], m['ticker'], metrics)
+        is_it = m['ticker'].endswith('.MI')
+        idx_pct = market['italia'] if is_it else market['usa']
+        vs_market = ""
+        if idx_pct is not None:
+            stesso_verso = (m['price_change_pct'] >= 0) == (idx_pct >= 0)
+            vs_market = f", {'in linea con' if stesso_verso else 'IN CONTROTENDENZA rispetto a'} il mercato generale"
+        vs_sector = f", settore in media a {sector_avg}%" if sector_avg is not None else ""
+        lines.append(f"{m['ticker']} | settore={m['sector']} | volume_ratio={m['volume_ratio']}x | "
+                      f"var={m['price_change_pct']}% | categoria=[{tipo_label[m['tipo']]}]{vs_market}{vs_sector}")
+
     prompt = (
         "Sei un analista che monitora un radar di anomalie di mercato ogni 15 minuti.\n"
+        f"{market_txt}\n"
         "H1 (regola rigida) segnala solo se volume_ratio>=3.0 E variazione>=1.5% insieme - "
         "i ticker qui sotto NON superano già entrambe le soglie insieme (altrimenti sarebbero "
         "già gestiti da H1), la 'categoria' indicata per ciascuno è già calcolata e corretta: "
         "NON contraddirla e NON riscrivere se supera o non supera una soglia, usala solo come "
-        "punto di partenza per la motivazione.\n\n"
+        "punto di partenza per la motivazione. Un movimento IN CONTROTENDENZA rispetto al "
+        "mercato generale, o molto più forte della media del proprio settore, merita più "
+        "attenzione (potrebbe essere specifico del titolo); un movimento in linea con mercato/"
+        "settore che si stanno muovendo tutti nella stessa direzione è meno significativo, "
+        "anche se numericamente vistoso.\n\n"
         + "\n".join(lines) +
         "\n\nSegnala SOLO i ticker che secondo il tuo giudizio meritano davvero attenzione. "
         "Sii selettivo: se oggi non c'è nulla di interessante, rispondi con un array vuoto - "
