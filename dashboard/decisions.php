@@ -108,6 +108,7 @@ foreach ($all_closed as $i => $p) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SAPTA — Paper Trading</title>
+    <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
     <script src="assets/chart.umd.min.js"></script>
     <script src="assets/charts.js"></script>
