@@ -359,6 +359,28 @@ Inoltre, in questa sessione:
 - **Prossimi punti**: (3) cruscotto paper trading con curva P&L nel tempo;
   (4) filtro mercato/settore (rimandato, più corposo).
 
+## 0nonies. Novità sessione 19/09 (parte 3) — Punto 3: cruscotto paper trading nel tempo
+
+- **`dashboard/decisions.php`**: aggiunta sezione "Andamento nel tempo" con
+  due grafici (riusano `assets/charts.js`) - **curva P&L cumulato** e
+  **win rate cumulato**, un punto per ogni posizione chiusa in ordine
+  cronologico, su tutto lo storico (non solo le ultime 15). Compare solo
+  da almeno 2 posizioni chiuse.
+- **Fix bug minore**: i KPI in alto (P&L totale, win rate) erano calcolati
+  solo sulle ultime 15 posizioni chiuse invece che sul vero totale storico
+  - corretto contestualmente, ora `pnl_totale`/`win_count`/`n_closed` usano
+  tutto lo storico (`human_decisions`, fino a 500 righe).
+- **`assets/charts.js`**: `buildChart()` ora accetta un parametro opzionale
+  `unit` (`'eur'` di default, retrocompatibile, o `'pct'`) per formattare
+  correttamente assi/tooltip di grafici percentuali come il win rate,
+  invece di forzare tutto in €.
+- Testato in locale con 3 posizioni chiuse su giorni diversi: curva P&L
+  (10 → 5 → 13) e win rate (100% → 50% → 66.7%) calcolati correttamente,
+  KPI in alto coerenti con l'intero storico. Nessun warning.
+- **Prossimo punto**: (4) filtro mercato/settore - ultimo dei 4 concordati,
+  più corposo, richiede una fonte dati nuova (indice di mercato tipo
+  SPY/FTSE MIB) non ancora presente nello stack.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
