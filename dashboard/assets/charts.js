@@ -12,6 +12,7 @@ if (typeof Chart !== 'undefined') {
 }
 
 function eurTick(value) { return '€' + value.toLocaleString('it-IT', {maximumFractionDigits: 0}); }
+function pctTick(value) { return value.toLocaleString('it-IT', {maximumFractionDigits: 0}) + '%'; }
 
 // Mostra al massimo ~10 etichette sull'asse X per non affollarlo
 function sparseTicks(labels) {
@@ -19,8 +20,13 @@ function sparseTicks(labels) {
     return { callback: (val, idx) => (idx % step === 0 ? labels[idx] : '') };
 }
 
-function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel, target, invalidation) {
+function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel, target, invalidation, unit) {
     if (typeof Chart === 'undefined') return;
+    unit = unit || 'eur'; // 'eur' (default, retrocompatibile) oppure 'pct'
+    const tickFn = unit === 'pct' ? pctTick : eurTick;
+    const fmtValue = (v) => unit === 'pct'
+        ? v.toLocaleString('it-IT', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + '%'
+        : '€' + v.toLocaleString('it-IT', {minimumFractionDigits: 2, maximumFractionDigits: 2});
     const el = document.getElementById(canvasId);
     if (!el || !values.length) return;
 
@@ -62,13 +68,13 @@ function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel,
                 tooltip: {
                     backgroundColor: '#1c2333', padding: 10, titleFont: { weight: '700' },
                     callbacks: {
-                        label: (ctx) => ctx.dataset.label + ': €' + ctx.parsed.y.toLocaleString('it-IT', {minimumFractionDigits: 2, maximumFractionDigits: 2})
+                        label: (ctx) => ctx.dataset.label + ': ' + fmtValue(ctx.parsed.y)
                     }
                 }
             },
             scales: {
                 x: { grid: { display: false }, ticks: sparseTicks(labels) },
-                y: { grid: { color: '#eef0f5' }, ticks: { callback: eurTick }, title: { display: true, text: 'Prezzo (EUR/USD)' } }
+                y: { grid: { color: '#eef0f5' }, ticks: { callback: tickFn }, title: { display: true, text: unit === 'pct' ? 'Percentuale' : 'Prezzo (EUR/USD)' } }
             }
         }
     });
