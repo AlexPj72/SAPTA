@@ -18,6 +18,7 @@ $is_today = $briefing_date === date('Y-m-d');
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SAPTA — Briefing pre-apertura</title>
+    <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
