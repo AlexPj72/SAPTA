@@ -296,3 +296,20 @@ La parte "settore" non serve una fonte dati nuova - si calcola da dati già pres
 Con questo si chiudono tutti e 4 i punti concordati con l'utente il 19/09 a partire dall'analisi ChatGPT sulle mail del 18/09 (verifica esiti automatica, vista/decisione guidata, cruscotto paper trading nel tempo, filtro mercato/settore).
 
 ---
+
+## Sessione 20/09/2026 – Claude: Regola sperimentale non operativa
+
+### Contesto
+ChatGPT ha proposto una regola aggiuntiva (volume relativo, prezzo, settore, MA20, conferma T+1), osservando che 4 alert AI Watch reali (STM, STLAM, ENEL, PRY) avevano tutti volume relativo <0.15x - la regola li avrebbe scartati tutti. Decisione esplicita con l'utente: regola completamente separata, NON operativa, gerarchia H1/AI Watch invariata - serve solo a validare nel tempo se filtra meglio i falsi segnali, prima di qualunque cambiamento alla pipeline reale.
+
+### Modifiche effettuate da Claude
+- Nuovo `src/modulo_experimental_rule.py`, agganciato a `sapta_us_close.yml` dopo EOD Verify: classifica ogni ticker (no_signal_low_volume / watch_low_volume / watch_high_volume_no_direction / candidate_long / candidate_short) e traccia la conferma alla seduta successiva per i soli candidati.
+- Nuove tabelle Supabase: `experimental_rule_candidates`, `experimental_rule_daily_stats`.
+- `dashboard/index.php`: nuova sezione "🧪 Regola sperimentale (NON operativa)" con statistiche e tabella candidati recenti, distinta visivamente (sfondo viola) dal resto della dashboard operativa.
+- **Commit:** modulo_experimental_rule.py (532be2d4d8), sapta_us_close.yml (c726833a36), dashboard/index.php (741d8b74d9).
+- Testato in locale: i 4 titoli reali citati classificati correttamente, casi long/short/no-direzione e ciclo di conferma T+1 tutti verificati. Nessun warning.
+
+### Prossimo passo (non ancora fatto)
+Tra qualche settimana, con storico sufficiente in `experimental_rule_candidates` + `ai_watch_daily_stats`/EOD Verify: confronto quantitativo tra questa regola e la pipeline attuale, prima di decidere se/dove inserirla nella gerarchia operativa.
+
+---
