@@ -28,6 +28,16 @@ foreach ($signals as $s) {
 $eod_stats_rows = supabase_query('ai_watch_daily_stats', ['select' => '*', 'order' => 'stat_date.desc', 'limit' => 1]);
 $eod_stats = $eod_stats_rows[0] ?? null;
 
+// [NUOVO 20/09] Regola sperimentale non operativa — ultime statistiche disponibili
+$exprule_stats_rows = supabase_query('experimental_rule_daily_stats', ['select' => '*', 'order' => 'stat_date.desc', 'limit' => 1]);
+$exprule_stats = $exprule_stats_rows[0] ?? null;
+$exprule_candidates_resolved = supabase_query('experimental_rule_candidates', ['select' => 'confirmed_next_session', 'confirmed_next_session' => 'not.is.null']);
+$exprule_n_resolved = count($exprule_candidates_resolved);
+$exprule_n_confirmed = count(array_filter($exprule_candidates_resolved, fn($c) => $c['confirmed_next_session']));
+
+// Candidati recenti (dettaglio)
+$exprule_recent = supabase_query('experimental_rule_candidates', ['select' => '*', 'order' => 'eval_date.desc', 'limit' => 10]);
+
 // Capitale corrente
 $capital_history = supabase_query('capital_state', [
     'select' => 'capital_eur,created_at',
@@ -254,6 +264,53 @@ $n_candidates_today = count($candidates);
         </tbody>
     </table>
     </div>
+</section>
+
+<section style="border-color:#e9d5ff; background:#faf5ff;">
+    <div class="section-head">
+        <div>
+            <h2>🧪 Regola sperimentale (NON operativa)</h2>
+            <p class="muted">Proposta il 20/09: filtro volume/prezzo/settore/MA20 con conferma il giorno dopo. Non genera segnali, non influisce su nulla — solo dati per un confronto futuro con H1/AI Watch.</p>
+        </div>
+    </div>
+    <?php if ($exprule_stats): ?>
+    <div class="stat-grid" style="margin:0 0 16px; padding:0; position:static;">
+        <div class="stat-card"><div class="stat-label">Ultimo giorno (<?= e(date('d/m', strtotime($exprule_stats['stat_date']))) ?>)</div><div class="stat-value"><?= $exprule_stats['n_totale'] ?></div><div class="stat-sub">ticker valutati</div></div>
+        <div class="stat-card"><div class="stat-label">Filtrati (volume &lt;0.7x)</div><div class="stat-value"><?= $exprule_stats['n_no_signal_low_volume'] ?></div></div>
+        <div class="stat-card"><div class="stat-label">Candidati long/short</div><div class="stat-value"><?= $exprule_stats['n_candidate_long'] + $exprule_stats['n_candidate_short'] ?></div></div>
+        <div class="stat-card <?= $exprule_n_resolved > 0 && $exprule_n_confirmed / $exprule_n_resolved >= 0.5 ? 'good' : '' ?>">
+            <div class="stat-label">Confermati a T+1 (storico)</div>
+            <div class="stat-value"><?= $exprule_n_resolved > 0 ? round($exprule_n_confirmed / $exprule_n_resolved * 100) . '%' : '—' ?></div>
+            <div class="stat-sub"><?= $exprule_n_confirmed ?>/<?= $exprule_n_resolved ?> candidati</div>
+        </div>
+    </div>
+    <?php else: ?>
+        <p class="empty-state">Ancora nessun dato — il primo si vede alla prossima chiusura USA (21:30 UTC).</p>
+    <?php endif; ?>
+    <?php if (!empty($exprule_recent)): ?>
+    <div class="table-wrap">
+    <table>
+        <thead><tr><th>Data</th><th>Ticker</th><th>Direzione</th><th>Volume</th><th>Var.</th><th>Sopra MA20</th><th>Esito T+1</th></tr></thead>
+        <tbody>
+        <?php foreach ($exprule_recent as $c): ?>
+        <tr>
+            <td><?= e(date('d/m', strtotime($c['eval_date']))) ?></td>
+            <td><a class="ticker-link" href="grafico.php?ticker=<?= urlencode($c['ticker']) ?>"><?= e($c['ticker']) ?></a></td>
+            <td><span class="badge <?= $c['direction'] === 'long' ? 'buy' : 'sell' ?>"><?= strtoupper($c['direction']) ?></span></td>
+            <td><?= number_format($c['volume_ratio'], 1) ?>x</td>
+            <td class="<?= $c['price_change_pct'] >= 0 ? 'positive' : 'negative' ?>"><?= number_format($c['price_change_pct'], 2) ?>%</td>
+            <td><?= $c['above_ma20'] ? 'sì' : 'no' ?></td>
+            <td>
+                <?php if ($c['confirmed_next_session'] === null): ?><span class="muted">in attesa</span>
+                <?php elseif ($c['confirmed_next_session']): ?><span class="badge approved">✅ confermato</span>
+                <?php else: ?><span class="badge rejected">❌ smentito</span><?php endif; ?>
+            </td>
+        </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+    </div>
+    <?php endif; ?>
 </section>
 
 </div>
