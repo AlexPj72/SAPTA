@@ -418,6 +418,46 @@ Inoltre, in questa sessione:
 - **Con questo si chiudono tutti e 4 i punti concordati con l'utente il
   19/09** a partire dall'analisi ChatGPT sulle mail del 18/09.
 
+## 0undecies. Novità sessione 20/09 — Regola sperimentale (non operativa)
+
+- **Contesto**: l'utente ha ricevuto da ChatGPT una proposta di regola
+  aggiuntiva (volume relativo, prezzo, forza di settore, MA20, conferma
+  alla seduta successiva), con un'osservazione chiave: 4 alert AI Watch
+  reali del 20/09 (STM +4.76%, STLAM -4.47%, ENEL -2.24%, PRY +2.99%)
+  avevano tutti volume relativo sotto 0.15x - la regola li avrebbe
+  scartati tutti, suggerendo che movimenti di prezzo senza vero volume
+  siano probabilmente rumore.
+- **Decisione esplicita presa con l'utente**: la regola resta
+  **completamente separata e non operativa**. Gerarchia INVARIATA -
+  AI Watch e H1 (3.0x/1.5%) non toccati in alcun modo. La regola serve
+  solo a rispondere, con dati reali accumulati nel tempo: "avrebbe
+  filtrato meglio i falsi segnali?" - non "dice di entrare". La feature
+  MA20 è dichiarata esplicitamente sperimentale, da validare prima di
+  darle peso.
+- **Nuovo `src/modulo_experimental_rule.py`**, agganciato allo stesso
+  workflow di EOD Verify (`sapta_us_close`, 21:30 UTC, dopo EOD Verify).
+  Regola: volume<0.7x → `no_signal_low_volume` (filtro duro); volume
+  0.7-1.5x → `watch_low_volume`; volume≥1.5x + prezzo≥±2% + sovra/
+  sottoperformance di settore + sopra/sotto MA20 → `candidate_long`/
+  `candidate_short` (unici casi con conferma T+1 tracciata); altrimenti
+  `watch_high_volume_no_direction`. Nuove tabelle
+  `experimental_rule_candidates` (dettaglio candidati + esito conferma) e
+  `experimental_rule_daily_stats` (conteggi giornalieri per classificazione,
+  su tutto l'universo).
+- **Dashboard**: nuova sezione in `index.php` ("🧪 Regola sperimentale (NON
+  operativa)", sfondo viola per distinguerla visivamente da tutto il resto),
+  con conteggi dell'ultimo giorno, % di candidati confermati a T+1 su tutto
+  lo storico, e tabella degli ultimi 10 candidati con esito.
+- Testato in locale: i 4 titoli reali citati dall'utente classificati
+  correttamente come `no_signal_low_volume`; un candidato genuino (volume
+  1.8x, +3%, sopra MA20) classificato `candidate_long`; casi short e
+  no-direzione verificati; ciclo di conferma T+1 verificato (long
+  confermato/smentito in base al confronto di chiusura). Nessun warning.
+- **Prossimo passo** (non ancora fatto, va programmato per fra qualche
+  settimana quando c'è storico sufficiente): confronto quantitativo tra
+  questa regola e H1/AI Watch sui dati reali accumulati, prima di
+  considerare qualunque cambiamento alla pipeline operativa.
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
