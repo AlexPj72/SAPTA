@@ -143,7 +143,21 @@ def get_latest_intraday_price(ticker):
 def calculate_technical_indicators(ticker):
     try:
         df = yf.download(ticker, period="60d", interval="1d", auto_adjust=True, progress=False)
-        if df.empty or len(df) < 31:
+        if df.empty:
+            # [NUOVO 22/09 - audit] Prima ritornava None senza log: causa
+            # più probabile del blocco silenzioso "b_processed_at settato
+            # ma nessun signals_raw scritto" osservato in audit (SHOP,
+            # QCOM, CSCO, ISRG, SNOW, META, BLK, AMD, INTC, GOOGL, NOW,
+            # PYPL, GOOG, CRWD, PST.MI e altri, 21-22/09/2026: TUTTI i
+            # candidati promossi a B avevano b_processed_at valorizzato ma
+            # zero righe in signals_raw). Non cambia nessuna soglia, solo
+            # rende visibile in log il motivo esatto dello scarto.
+            print(f"⚠️ {ticker}: yf.download ha restituito un DataFrame vuoto (60d/1d) - "
+                  f"nessun indicatore calcolabile, candidato scartato senza segnale")
+            return None
+        if len(df) < 31:
+            print(f"⚠️ {ticker}: solo {len(df)} barre giornaliere ricevute da yfinance "
+                  f"(soglia minima 31 per RSI/MACD/BBands) - candidato scartato senza segnale")
             return None
 
         df['RSI'] = ta.rsi(df['Close'], length=14)
@@ -168,7 +182,7 @@ def calculate_technical_indicators(ticker):
             'is_provisional_bar': is_provisional
         }
     except Exception as e:
-        print(f"❌ Errore indicatori {ticker}: {e}")
+        print(f"❌ Errore indicatori {ticker}: {type(e).__name__}: {e}")
         return None
 
 
@@ -482,6 +496,14 @@ if __name__ == "__main__":
     if not candidates:
         print("⚠️ Nessun candidato da analizzare (H2 non ha promosso nulla, o già tutto processato)")
 
+    # [NUOVO 22/09 - audit] Contatori diagnostici: rispondono a "zero
+    # segnali perché non c'erano opportunità" vs "zero segnali perché la
+    # pipeline è bloccata da qualche parte" (Sezione 13 addendum audit).
+    n_totale = len(candidates)
+    n_no_indicators = 0
+    n_deterioramento = 0
+    n_signal_written = 0
+
     for candidate in candidates:
         ticker = candidate['ticker']
         print(f"\n📊 Analisi {ticker} (context_score={candidate.get('context_score')}, "
@@ -489,6 +511,7 @@ if __name__ == "__main__":
 
         indicators = calculate_technical_indicators(ticker)
         if not indicators:
+            n_no_indicators += 1
             mark_processed(candidate['id'])
             continue
 
@@ -509,6 +532,7 @@ if __name__ == "__main__":
         )
 
         if signal['opportunity_type'] == 'deterioramento_strutturale':
+            n_deterioramento += 1
             try:
                 supabase.table('screening_candidates').update({
                     'status': 'scartato_deterioramento'
@@ -518,8 +542,17 @@ if __name__ == "__main__":
                 print(f"⚠️ Errore aggiornamento status per {ticker}: {e}")
         else:
             write_signal(ticker, candidate['id'], signal)
+            n_signal_written += 1
             run_ai_agent(ticker, indicators, sentiment, candidate.get('context_score'),
                          candidate.get('news_light_count'), earnings_soon)
 
         if not args.force_reprocess:
             mark_processed(candidate['id'])
+
+    print(f"\n📋 Riepilogo run: {n_totale} candidati letti · "
+          f"{n_no_indicators} scartati per indicatori tecnici non disponibili (yfinance) · "
+          f"{n_deterioramento} scartati per deterioramento strutturale · "
+          f"{n_signal_written} segnali scritti su signals_raw")
+    if n_totale > 0 and n_signal_written == 0:
+        print("⚠️ ATTENZIONE: nessun segnale scritto in questo run nonostante candidati presenti - "
+              "controllare la riga 'scartati per indicatori tecnici' qui sopra, probabile causa tecnica (yfinance), non assenza di opportunità")
