@@ -335,3 +335,22 @@ Query Supabase: 154 candidati `promosso_a_B` negli ultimi 7gg, 78 con `b_process
 Che `signals_raw` ricominci a popolarsi dal prossimo ciclo `sapta_slow`. Se il rate-limit Yahoo dovesse persistere anche a batch, valutare una fonte dati alternativa per Modulo B (non ancora necessario, da provare prima con questo fix).
 
 ---
+
+## Sessione 24/09/2026 (parte 2) – Claude: prima passata backtest indicatori tecnici
+
+### Contesto
+L'utente ha portato un protocollo dettagliato (16 sezioni) per testare se indicatori tecnici aggiuntivi (MA, RSI, MACD, ADX, ATR, Bollinger, ROC, volatilità storica, Relative Strength, gap, supporti/resistenze) aggiungono informazione utile alle anomalie SAPTA, con vincolo esplicito di non toccare la pipeline operativa prima della conclusione del backtest.
+
+### Limite scoperto subito
+`screening_candidates` (evento "anomalia SAPTA" nella definizione attuale H1/H2) esiste solo dal 18/09 - 6 giorni, 234 eventi, 88 ticker. +10d e +20d sono quindi DATA_UNAVAILABLE oggi per costruzione (nessun evento ha ancora avuto il tempo di maturare quel numero di giorni di borsa), non per un limite tecnico. +5d praticamente vuoto anch'esso (N=0). Solo +1d/+3d calcolabili, con N modesto e osservazioni non indipendenti (eventi concentrati in 4-6 giornate di mercato).
+
+### Modifiche effettuate da Claude
+- Nuovo `scripts/backtest_indicatori.sql`: query riutilizzabile (window functions su Supabase) che calcola SMA20/50/200, RSI14 (media semplice, non Wilder), ATR14/ATR%, Bollinger position, ROC5, volatilità storica 20d AS OF la data di ogni evento (nessun lookahead), e rendimenti successivi a 1/3/5/10/20 giorni di borsa via LEAD().
+- Nuovo `BACKTEST_INDICATORI_REPORT.md`: risultati della prima passata, tutti classificati DA VERIFICARE (mai INFORMATIVO) per N piccolo e finestra di mercato troppo corta, coerente con la Sezione 12 del protocollo dell'utente.
+- **Non implementati in questa passata** (rimandati): MACD (serve EMA ricorsiva), ADX (serve smoothing +DM/-DM multi-stadio), Relative Strength vs indice/settore, Gap, Supporti/resistenze, combinazioni a 2-3 indicatori.
+- **Commit:** stesso commit di `scripts/backtest_indicatori.sql` + `BACKTEST_INDICATORI_REPORT.md`.
+
+### Prossimo passo
+Ri-eseguire la stessa query tra 2-3 settimane (per avere +10d) e 5-6 settimane (per +20d). Se richiesto dall'utente, implementare gli indicatori mancanti (MACD/ADX/Relative Strength/Gap) e le combinazioni a 2-3 condizioni prima del prossimo giro. Nessuna modifica alla pipeline operativa nel frattempo.
+
+---
