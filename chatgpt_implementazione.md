@@ -313,3 +313,25 @@ ChatGPT ha proposto una regola aggiuntiva (volume relativo, prezzo, settore, MA2
 Tra qualche settimana, con storico sufficiente in `experimental_rule_candidates` + `ai_watch_daily_stats`/EOD Verify: confronto quantitativo tra questa regola e la pipeline attuale, prima di decidere se/dove inserirla nella gerarchia operativa.
 
 ---
+
+## Sessione 24/09/2026 – Claude: chiusura audit 21-22/09 (3 cause radice)
+
+### Contesto
+L'utente ha portato un audit trasversale (pagine pubbliche pujia.it/sapta/, datato 21-22/09): 0 opportunità/segnali attivi nonostante candidati promossi a B, valori H1/Anomaly apparentemente incoerenti sullo stesso ticker (es. ISRG), caso completo BC (promosso_a_B ma nessun segnale), "Chart.js non disponibile" ricorrente, refuso "1 ricontrolli". A differenza delle sessioni precedenti, Claude ha lavorato con repo clonato via token GitHub fornito dall'utente in chat (fine-grained, scope Contents) + query dirette su Supabase, non solo sui documenti statici.
+
+### Diagnosi (confermata su dati reali, non solo sul codice)
+Query Supabase: 154 candidati `promosso_a_B` negli ultimi 7gg, 78 con `b_processed_at` valorizzato nelle ultime 48h, **zero** righe in `signals_raw` (ferma all'11/09) e zero in `scartato_deterioramento`. Il commit del 22/09 di ChatGPT/utente (`6ceb693`, log diagnostico in `calculate_technical_indicators`) aveva già isolato il sintomo ma non la causa. Trovata leggendo il codice: `yf.download()` chiamato una volta per ticker in un loop seriale senza pausa (fino a ~90 chiamate/run) - quasi certamente rate-limit Yahoo Finance sugli IP dei runner GitHub Actions (Modulo A e load_historical_data.py scaricano già a batch, per questo non avevano mai avuto il problema).
+
+### Modifiche effettuate da Claude
+- `src/modulo_b_analysis.py`: nuova `fetch_daily_batch()` (batch da 20 ticker + sleep 2s, stesso pattern di `load_historical_data.py`), chiamata una volta a inizio run invece che per-candidato dentro il loop; `calculate_technical_indicators(ticker, daily_df)` riusa il dato prefetchato.
+- `src/modulo_h_anomaly.py`: nuova `get_tickers_already_candidate_today()` - H1 non re-inserisce più un ticker con un candidato già aperto oggi (era la causa delle righe "duplicate" ISRG nel radar anomalie).
+- `dashboard/grafico.php`: rimossa copia locale morta di `eurTick`/`sparseTicks`/`buildChart` (duplicava `assets/charts.js` dal refactor 19/09, senza guardia su Chart.js mancante - poteva causare un ReferenceError silenzioso dopo l'avviso).
+- `dashboard/helpers.php` (nuovo `plural_it()`), `today.php`, `valuta.php`: fix "N ricontrolli" → singolare/plurale corretto.
+- `.gitignore` aggiunto, rimossi alcuni `.pyc` committati per errore.
+- **Commit:** `071981c` (tutte le modifiche sopra in un solo commit, push diretto su `main` con token fornito dall'utente in chat, non salvato).
+- Nessuna soglia di scoring toccata, coerente con la linea "non toccare H1 finché non è chiuso l'audit" già decisa nel documento portato dall'utente.
+
+### Da verificare al prossimo run reale
+Che `signals_raw` ricominci a popolarsi dal prossimo ciclo `sapta_slow`. Se il rate-limit Yahoo dovesse persistere anche a batch, valutare una fonte dati alternativa per Modulo B (non ancora necessario, da provare prima con questo fix).
+
+---

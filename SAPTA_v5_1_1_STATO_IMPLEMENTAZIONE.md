@@ -458,6 +458,67 @@ Inoltre, in questa sessione:
   questa regola e H1/AI Watch sui dati reali accumulati, prima di
   considerare qualunque cambiamento alla pipeline operativa.
 
+## 0duodecies. Novità sessione 24/09 — Audit 21-22/09: 3 cause radice chiuse
+
+- **Contesto**: l'utente ha portato un audit trasversale delle pagine
+  pubbliche (dashboard, radar anomalie, pagina titolo BC.MI) datato
+  21-22/09, che segnalava: pipeline con 0 opportunità/segnali attivi
+  nonostante candidati promossi; valori H1/Anomaly apparentemente
+  incoerenti sullo stesso ticker (es. ISRG); caso completo BC
+  (`promosso_a_B` ma "ultimo segnale: —"); "Chart.js non disponibile" su
+  più pagine; refuso "1 ricontrolli". Verificato con repo GitHub clonato
+  + query dirette su Supabase (non sui soli documenti statici).
+- **Causa radice 2 (la più importante) - `src/modulo_b_analysis.py`**:
+  confermato su Supabase che negli ultimi 7gg **154 candidati promossi a
+  B**, **78 processati** (`b_processed_at` valorizzato) nelle ultime 48h,
+  **zero righe scritte in `signals_raw`** (ferma all'11/09) e zero in
+  `scartato_deterioramento` - cioè il 100% falliva dentro
+  `calculate_technical_indicators()`. Causa: la funzione chiamava
+  `yf.download()` **una volta per ticker, in sequenza, senza pausa**
+  (fino a ~90 chiamate consecutive a run) - quasi certamente bloccata dal
+  rate-limit di Yahoo Finance sugli IP datacenter dei runner GitHub
+  Actions. Modulo A e `load_historical_data.py` non avevano mai avuto
+  questo problema perché scaricano già a batch. Fix: nuova
+  `fetch_daily_batch()` che scarica tutti i candidati del run in blocchi
+  da 20 ticker (stesso pattern di `load_historical_data.py`, sleep 2s tra
+  blocchi) prima del loop, poi `calculate_technical_indicators(ticker,
+  daily_df)` riusa il dato già scaricato invece di richiamare yfinance.
+  Non cambia nessuna soglia/logica di scoring.
+- **Causa radice 3 - `src/modulo_h_anomaly.py`**: H1 (ogni 15 min)
+  inseriva un **nuovo** record `screening_candidates` per un ticker ogni
+  volta che ricompariva sopra soglia nello stesso giorno, invece di
+  aggiornare quello già aperto. H2 poi ricalcolava `anomaly_score` sulle
+  barre più recenti per ciascuna riga duplicata - da cui righe "gemelle"
+  con `h1_score` diverso (calcolato in istanti diversi) ma
+  `anomaly_score` identico, lette nell'audit come un'incoerenza tra le
+  due metriche (non lo erano: stessa formula, istanti diversi). Effetto
+  collaterale: lo stesso ticker poteva finire `promosso_a_B` più volte
+  nello stesso giorno. Fix: nuova `get_tickers_already_candidate_today()`
+  - H1 salta un ticker che ha già un candidato aperto oggi
+  (`h1_candidate` o `promosso_a_B`).
+- **Bug dashboard - `dashboard/grafico.php`**: conteneva ancora una copia
+  locale completa di `eurTick`/`sparseTicks`/`buildChart`, duplicato mai
+  rimosso dal refactor del 19/09 che le aveva estratte in
+  `assets/charts.js` per riuso. A differenza della versione in
+  `charts.js`, la copia locale non aveva la guardia `typeof Chart !==
+  'undefined'` sulle righe `Chart.defaults` - se Chart.js non si
+  caricava, l'avviso "Chart.js non disponibile" veniva mostrato
+  correttamente ma l'esecuzione dello script proseguiva comunque fino a
+  un `ReferenceError` sulle righe non guardate. Rimossa la copia locale,
+  la pagina usa solo le funzioni condivise di `charts.js`.
+- **Refuso singolare/plurale**: "N ricontrolli" mostrava sempre il
+  plurale anche per N=1. Nuovo helper `plural_it()` in `helpers.php`,
+  applicato in `today.php` e `valuta.php`.
+- **Pulizia repo**: rimossi alcuni `.pyc` committati per errore,
+  aggiunto `.gitignore` per `__pycache__/`.
+- Tutte le modifiche committate e pushate su GitHub (nessuna soglia di
+  scoring toccata). **Da verificare al prossimo run reale** (prossimo
+  ciclo `sapta_slow`): che `signals_raw` ricominci finalmente a
+  popolarsi. Se il rate-limit Yahoo dovesse persistere anche a batch,
+  il prossimo passo sarebbe valutare una libreria/fonte dati alternativa
+  per i dati giornalieri in Modulo B (non ancora necessario, da provare
+  prima con questo fix).
+
 ## 1. Database (Supabase)
 
 | Elemento | Stato | Note |
