@@ -222,90 +222,16 @@ const intradayValues = <?= json_encode($intraday_values) ?>;
 const targetPrice = <?= $target_price !== null ? json_encode((float) $target_price) : 'null' ?>;
 const invalidationPrice = <?= $invalidation_price !== null ? json_encode((float) $invalidation_price) : 'null' ?>;
 
-Chart.defaults.font.family = "'Inter', sans-serif";
-Chart.defaults.color = '#6b7280';
-
-function eurTick(value) { return '€' + value.toLocaleString('it-IT', {maximumFractionDigits: 0}); }
-
-// Mostra al massimo ~10 etichette sull'asse X per non affollarlo
-function sparseTicks(labels) {
-    const step = Math.max(1, Math.ceil(labels.length / 10));
-    return { callback: (val, idx) => (idx % step === 0 ? labels[idx] : '') };
-}
-
-function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel, target, invalidation) {
-    const el = document.getElementById(canvasId);
-    if (!el || !values.length) return;
-
-    const datasets = [{
-        label: seriesLabel,
-        data: values,
-        borderColor: lineColor,
-        backgroundColor: fillColor,
-        fill: true,
-        tension: 0.25,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        pointHoverBackgroundColor: lineColor,
-        borderWidth: 2.5,
-    }];
-
-    if (target !== null) {
-        datasets.push({
-            label: 'Target',
-            data: labels.map(() => target),
-            borderColor: '#16a34a',
-            borderDash: [6, 4],
-            borderWidth: 1.5,
-            pointRadius: 0,
-            fill: false,
-        });
-    }
-    if (invalidation !== null) {
-        datasets.push({
-            label: 'Invalidazione',
-            data: labels.map(() => invalidation),
-            borderColor: '#dc2626',
-            borderDash: [6, 4],
-            borderWidth: 1.5,
-            pointRadius: 0,
-            fill: false,
-        });
-    }
-
-    new Chart(el, {
-        type: 'line',
-        data: { labels, datasets },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: '#1c2333',
-                    padding: 10,
-                    titleFont: { weight: '700' },
-                    callbacks: {
-                        label: (ctx) => ctx.dataset.label + ': €' + ctx.parsed.y.toLocaleString('it-IT', {minimumFractionDigits: 2, maximumFractionDigits: 2})
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    grid: { display: false },
-                    ticks: sparseTicks(labels),
-                },
-                y: {
-                    grid: { color: '#eef0f5' },
-                    ticks: { callback: eurTick },
-                    title: { display: true, text: 'Prezzo (EUR/USD)' },
-                }
-            }
-        }
-    });
-}
-
+// [FIX 24/09] Questo blocco duplicava per intero eurTick/sparseTicks/buildChart
+// già estratte in assets/charts.js il 19/09 (commento del refactor diceva
+// "riusate da grafico.php" ma la copia locale non era mai stata rimossa).
+// La copia locale, a differenza di quella in charts.js, non aveva la guardia
+// "typeof Chart !== 'undefined'" sulle righe Chart.defaults: se Chart.js non
+// si carica, il guard sopra mostra correttamente l'avviso ma execution
+// continua fino a queste righe, che avrebbero comunque fallito con un
+// ReferenceError. Rimossa la copia: si usano solo le funzioni condivise
+// (già caricate da assets/charts.js) per evitare che le due versioni
+// divergano di nuovo in futuro.
 buildChart('dailyChart', dailyLabels, dailyValues, '#4f46e5', 'rgba(79,70,229,0.08)', 'Prezzo close', targetPrice, invalidationPrice);
 buildChart('monthlyChart', monthlyLabels, monthlyValues, '#0891b2', 'rgba(8,145,178,0.08)', 'Prezzo close', null, null);
 buildChart('weeklyChart', weeklyLabels, weeklyValues, '#ea580c', 'rgba(234,88,12,0.08)', 'Prezzo close (15m)', null, null);

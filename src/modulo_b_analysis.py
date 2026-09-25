@@ -140,19 +140,62 @@ def get_latest_intraday_price(ticker):
         return None
 
 
-def calculate_technical_indicators(ticker):
+DAILY_BATCH_SIZE = 20  # ticker per chiamata yf.download, stesso principio di load_historical_data.py
+DAILY_BATCH_SLEEP_SECONDS = 2
+
+
+def fetch_daily_batch(tickers):
+    """[NUOVO 24/09 - causa radice 2] La versione precedente chiamava
+    yf.download() UNA VOLTA PER TICKER dentro il loop di Modulo B (fino a
+    ~90 chiamate singole consecutive per run, senza pausa). Confermato su
+    Supabase: 154 candidati promossi a B negli ultimi 7gg, 78 processati
+    (b_processed_at valorizzato) nelle ultime 48h, ZERO righe in
+    signals_raw e ZERO in scartato_deterioramento - cioè tutti fallivano
+    dentro calculate_technical_indicators() con DataFrame vuoto. Causa:
+    Yahoo Finance applica rate-limit aggressivo agli IP datacenter (i
+    runner GitHub Actions sono IP noti), e le chiamate seriali ravvicinate
+    lo attivano quasi subito. Modulo A e load_historical_data.py non hanno
+    mai avuto questo problema perché scaricano già a batch (rispettivamente
+    un'unica chiamata multi-ticker e blocchi da 20 con sleep(2) tra un
+    blocco e l'altro) - stesso pattern replicato qui.
+    Ritorna {ticker: DataFrame} solo per i ticker con dati validi."""
+    result = {}
+    tickers = list(dict.fromkeys(tickers))  # dedup preservando l'ordine
+    for i in range(0, len(tickers), DAILY_BATCH_SIZE):
+        batch = tickers[i:i + DAILY_BATCH_SIZE]
+        try:
+            df = yf.download(batch, period="60d", interval="1d", group_by='ticker',
+                              auto_adjust=True, progress=False)
+            if df.empty:
+                print(f"⚠️ Batch giornaliero vuoto per {batch}")
+            elif len(batch) == 1:
+                result[batch[0]] = df
+            else:
+                for t in batch:
+                    try:
+                        sub = df[t].dropna(how='all')
+                        if not sub.empty:
+                            result[t] = sub
+                    except (KeyError, Exception):
+                        pass
+        except Exception as e:
+            print(f"❌ Errore yf.download batch giornaliero {batch}: {e}")
+        if i + DAILY_BATCH_SIZE < len(tickers):
+            time.sleep(DAILY_BATCH_SLEEP_SECONDS)
+    return result
+
+
+def calculate_technical_indicators(ticker, daily_df=None):
     try:
-        df = yf.download(ticker, period="60d", interval="1d", auto_adjust=True, progress=False)
-        if df.empty:
-            # [NUOVO 22/09 - audit] Prima ritornava None senza log: causa
-            # più probabile del blocco silenzioso "b_processed_at settato
-            # ma nessun signals_raw scritto" osservato in audit (SHOP,
-            # QCOM, CSCO, ISRG, SNOW, META, BLK, AMD, INTC, GOOGL, NOW,
-            # PYPL, GOOG, CRWD, PST.MI e altri, 21-22/09/2026: TUTTI i
-            # candidati promossi a B avevano b_processed_at valorizzato ma
-            # zero righe in signals_raw). Non cambia nessuna soglia, solo
-            # rende visibile in log il motivo esatto dello scarto.
-            print(f"⚠️ {ticker}: yf.download ha restituito un DataFrame vuoto (60d/1d) - "
+        df = daily_df if daily_df is not None else fetch_daily_batch([ticker]).get(ticker)
+        if df is None or df.empty:
+            # [NUOVO 22/09 - audit, causa confermata 24/09] Prima ritornava
+            # None senza log: causa del blocco silenzioso "b_processed_at
+            # settato ma nessun signals_raw scritto" osservato in audit
+            # (21-22/09/2026). Causa radice reale trovata il 24/09: vedi
+            # fetch_daily_batch() - non era il ticker, erano le chiamate
+            # yf.download seriali senza pausa che finivano rate-limitate.
+            print(f"⚠️ {ticker}: nessun dato giornaliero disponibile (60d/1d) - "
                   f"nessun indicatore calcolabile, candidato scartato senza segnale")
             return None
         if len(df) < 31:
@@ -496,6 +539,12 @@ if __name__ == "__main__":
     if not candidates:
         print("⚠️ Nessun candidato da analizzare (H2 non ha promosso nulla, o già tutto processato)")
 
+    # [NUOVO 24/09 - causa radice 2] Un solo giro di chiamate batch
+    # all'inizio del run invece di una yf.download per candidato dentro il
+    # loop: vedi fetch_daily_batch() per il motivo (rate-limit Yahoo su IP
+    # datacenter). Anche a run vuoto la chiamata è innocua (lista vuota).
+    daily_data = fetch_daily_batch([c['ticker'] for c in candidates])
+
     # [NUOVO 22/09 - audit] Contatori diagnostici: rispondono a "zero
     # segnali perché non c'erano opportunità" vs "zero segnali perché la
     # pipeline è bloccata da qualche parte" (Sezione 13 addendum audit).
@@ -509,7 +558,7 @@ if __name__ == "__main__":
         print(f"\n📊 Analisi {ticker} (context_score={candidate.get('context_score')}, "
               f"news_light_count={candidate.get('news_light_count')})...")
 
-        indicators = calculate_technical_indicators(ticker)
+        indicators = calculate_technical_indicators(ticker, daily_data.get(ticker))
         if not indicators:
             n_no_indicators += 1
             mark_processed(candidate['id'])
@@ -555,4 +604,5 @@ if __name__ == "__main__":
           f"{n_signal_written} segnali scritti su signals_raw")
     if n_totale > 0 and n_signal_written == 0:
         print("⚠️ ATTENZIONE: nessun segnale scritto in questo run nonostante candidati presenti - "
-              "controllare la riga 'scartati per indicatori tecnici' qui sopra, probabile causa tecnica (yfinance), non assenza di opportunità")
+              "controllare la riga 'scartati per indicatori tecnici' qui sopra. Se tutti i candidati "
+              "sono finiti lì, probabile rate-limit Yahoo Finance (vedi fetch_daily_batch), non assenza di opportunità")

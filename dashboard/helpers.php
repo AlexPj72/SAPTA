@@ -20,6 +20,13 @@ function fmt_pct($v, $dec = 2) {
     return $v === null ? '—' : number_format(((float) $v) * 100, $dec) . '%';
 }
 
+/** [FIX 24/09 - audit] Concorda singolare/plurale per un conteggio,
+ * es. plural_it(1, 'ricontrollo', 'ricontrolli') => "1 ricontrollo",
+ * plural_it(4, 'ricontrollo', 'ricontrolli') => "4 ricontrolli". */
+function plural_it($count, $singular, $plural) {
+    return $count . ' ' . (((int) $count) === 1 ? $singular : $plural);
+}
+
 /** Barra di navigazione condivisa - stessa su tutte le pagine. */
 function render_nav($active) {
     $items = [

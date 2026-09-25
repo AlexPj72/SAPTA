@@ -34,7 +34,7 @@ foreach ($confirmed_hyp as $h) {
     $items[] = [
         'kind' => 'ipotesi', 'ticker' => $h['ticker'], 'ts' => $h['resolved_at'] ?? $h['created_at'],
         'action' => null, 'score' => null,
-        'summary' => e($h['motivazione']) . " (confermato dopo " . (int) ($h['checked_count'] ?? 0) . " ricontrolli)",
+        'summary' => e($h['motivazione']) . " (confermato dopo " . plural_it((int) ($h['checked_count'] ?? 0), 'ricontrollo', 'ricontrolli') . ")",
         'raw' => $h,
     ];
 }

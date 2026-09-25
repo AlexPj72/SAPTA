@@ -105,12 +105,44 @@ def compute_intraday_anomaly(bars, volume_threshold, price_threshold):
 # H1
 # ============================================================
 
+def get_tickers_already_candidate_today():
+    """[NUOVO 24/09 - causa radice 3] H1 girava ogni 15 min e inserzione un
+    NUOVO record per lo stesso ticker ogni volta che ricompariva sopra
+    soglia nello stesso giorno, invece di aggiornare quello già aperto.
+    Risultato osservato in audit: lo stesso ticker (es. ISRG) con più righe
+    nella stessa giornata, ciascuna con h1_score diverso (calcolato in
+    momenti diversi) ma poi tutte processate da H2 che ricalcola
+    anomaly_score sulle barre PIÙ RECENTI per ognuna - da cui righe
+    "duplicate" con anomaly_score identico ma h1_score diverso, lette
+    dal radar anomalie come se fossero metriche incoerenti tra loro
+    (non lo sono: sono la stessa metrica calcolata in istanti diversi).
+    Effetto collaterale: lo stesso ticker può finire promosso a B più
+    volte nello stesso giorno, gonfiando il conteggio "promosso_a_B" senza
+    reale beneficio. Fix: non re-inserire un ticker che ha già un
+    candidato aperto oggi (h1_candidate o promosso_a_B, qualunque esito
+    H2)."""
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    try:
+        response = (supabase.table('screening_candidates')
+                    .select('ticker')
+                    .gte('timestamp', today_start)
+                    .in_('status', ['h1_candidate', 'promosso_a_B'])
+                    .execute())
+        return {row['ticker'] for row in (response.data or [])}
+    except Exception as e:
+        print(f"⚠️ Errore lettura candidati già aperti oggi: {e}")
+        return set()
+
+
 def run_h1():
     tickers = get_universe()
     meta_map = get_ticker_meta_map()
+    already_candidate = get_tickers_already_candidate_today()
     candidates = []
 
     for ticker in tickers:
+        if ticker in already_candidate:
+            continue
         bars = get_recent_bars(ticker, H1_BARS_LOOKBACK)
         if len(bars) < H1_MIN_BARS_FOR_BASELINE:
             continue

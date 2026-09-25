@@ -130,7 +130,7 @@ $relevant_index_label = $is_it ? 'FTSE MIB' : 'S&amp;P 500';
             <b><?= $hypothesis['status'] === 'confermato' ? '✅ Ipotesi confermata' : '👀 Ipotesi in osservazione' ?>.</b>
             <?= e($hypothesis['motivazione']) ?>
             <?php if (($hypothesis['status'] ?? '') === 'confermato'): ?>
-                Direzione mantenuta dopo <?= (int) $hypothesis['checked_count'] ?> ricontrolli
+                Direzione mantenuta dopo <?= plural_it((int) $hypothesis['checked_count'], 'ricontrollo', 'ricontrolli') ?>
                 (variazione attuale <?= number_format($hypothesis['price_change_pct_latest'] ?? 0, 2) ?>%,
                 era <?= number_format($hypothesis['price_change_pct'], 2) ?>% all'alert iniziale).
             <?php endif; ?>
