@@ -371,3 +371,28 @@ Pattern più consistente: "sopra SMA20 + RSI>70" (N=17-22, +1.68%/+58.8% a +1d, 
 Relative Strength vs indice reale o vs settore, combinazioni a 3 condizioni, supporti/resistenze a 20/200gg.
 
 ---
+
+## Sessione 26/09/2026 – Claude: RS reale, combo a 3 condizioni, supporti/resistenze 200gg + fix deploy dashboard
+
+### Fix deploy dashboard (prima del backtest)
+L'utente ha segnalato "Ticker mancante" aprendo index.php sul sito live. Diagnosi confermata dall'utente: il file `index.php` caricato su Aruba conteneva per errore il codice di `grafico.php` (probabile scambio durante un caricamento manuale precedente, non un bug nel repo). `grafico.php` su Aruba era invece corretto (non uno scambio incrociato). Fornito il vero `index.php` dal repo da ricaricare - risolto, confermato dall'utente ("ok, funziona ora").
+
+Segnalato anche un problema separato: la Chat AI della dashboard "finisce subito la quota". Causa: `GEMINI_API_KEY` condivisa tra Chat AI, Modulo I (run_ai_agent, fino a ~90 chiamate/giorno senza pausa), AI Watch (ogni 15 min) e Briefing. Fix: nuova costante opzionale `GEMINI_CHAT_API_KEY` in config.php (fallback su GEMINI_API_KEY se vuota) + pausa 3s dopo ogni run_ai_agent() in modulo_b_analysis.py + corretta l'etichetta `model_used` nel DB (diceva gemini-2.5-flash, la chiamata reale usa gemini-3.1-flash-lite dal 14/09). Commit `578c914`.
+
+### Relative Strength con indice reale
+Fino ad ora si usava un proxy (rendimento medio cross-sezionale US/IT) perché `prezzi` non aveva storico giornaliero per `^GSPC`/`FTSEMIB.MI` (solo 15m dal 18/09). Aggiunto nuovo scope `indices` a `src/load_historical_data.py` (2 anni di storico giornaliero, solo questi 2 ticker) e al workflow `load_historical.yml`. **Claude ha lanciato il workflow direttamente via GitHub API** (il token fine-grained fornito dall'utente ha risultato avere anche il permesso Actions:write, non solo Contents) - completato con successo in ~70 secondi, 501-506 barre scritte per indice. RS reale ricalcolata: stessa direzione del proxy (RS positiva → rendimento migliore), N=90-129.
+
+### Combo a 3 condizioni e supporti/resistenze 200gg
+"Sopra SMA20 + RSI≥50 + RS5 reale positiva": N=65-97, il miglior compromesso N/effetto di tutto il backtest finora (+0.50%/+55.4% a +1d, +1.87% a +3d) - ma ancora DA VERIFICARE per la finestra di mercato corta. Vicinanza a massimo/minimo 200gg: N troppo piccolo (7 casi) per dire qualcosa.
+
+Query in `scripts/backtest_indicatori_parte3.sql`, risultati in `BACKTEST_INDICATORI_REPORT.md` sezione "Parte 3". Commit del nuovo scope `indices`: `03d37e7`.
+
+### Proposte fatte all'utente per migliorare affidabilità/usabilità (non ancora implementate)
+1. Backtest del punteggio nativo SAPTA stesso (context_score/anomaly_score/final_rank_score) vs rendimento reale - probabilmente più importante di RSI/MACD esterni.
+2. Calibrazione soglie AI Watch (60%/30%, placeholder) con i dati EOD Verify che si accumulano.
+3. Confronto Modulo I (Gemini, ai_agent_decisions) vs esito reale.
+4. Confronto regola sperimentale vs H1/H2 (già pianificato).
+5. Hit-rate per data_quality_flag, liquidity_bucket, settore.
+6. Pagina/endpoint con commit hash + data deploy visibile sulla dashboard, per individuare in un colpo d'occhio disallineamenti come quello di index.php di oggi.
+
+---

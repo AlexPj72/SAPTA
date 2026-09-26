@@ -105,6 +105,35 @@ casi a +3d — ma N=17-22 è ancora un campione minuscolo, non una conclusione.
 ADX>40 non ha N: nessun evento del campione ha mostrato un trend così forte
 in questa finestra.
 
+## Parte 3 (26/09) — Relative Strength con indice reale, combo a 3 condizioni, supporti/resistenze 200gg
+
+Caricato lo storico giornaliero 2 anni di `^GSPC` e `FTSEMIB.MI` (prima
+esistevano solo a 15m dal 18/09 — insufficiente per RS a 5gg) tramite
+`src/load_historical_data.py --scope=indices` (nuovo scope, workflow
+lanciato il 26/09, 501-506 barre scritte per indice). Query in
+`scripts/backtest_indicatori_parte3.sql`.
+
+| Gruppo | Condizione | N | N+1d | Media+1d | %pos+1d | N+3d | Media+3d |
+|---|---|--:|--:|--:|--:|--:|--:|
+| RS5 vs indice REALE | positiva (batte S&P500/FTSEMIB) | 129 | 90 | +0.32% | 51.1% | 45 | +1.36% |
+| RS5 vs indice REALE | negativa (sotto S&P500/FTSEMIB) | 141 | 86 | -0.39% | 46.5% | 25 | -0.72% |
+| Combo 3: SMA20+RSI+RS5 | sopra SMA20 + RSI≥50 + RS5+ | 97 | 65 | +0.50% | 55.4% | 33 | +1.87% |
+| Combo 3: SMA20+RSI+RS5 | sotto SMA20 + RSI<50 + RS5- | 120 | 74 | -0.43% | 47.3% | 19 | -1.04% |
+| Combo 3: SMA20+RSI+RS5 | sotto SMA20 + RSI<50 + RS5+ | 18 | 13 | +0.42% | 38.5% | 9 | +0.84% |
+| Combo 3: SMA20+RSI+RS5 | altre combinazioni | ≤13 ciascuna | — | — | — | — | — |
+| Vicinanza max/min 200gg | zona intermedia | 256 | 170 | -0.04% | 48.8% | 67 | +0.55% |
+| Vicinanza max/min 200gg | vicino massimo 200gg | 7 | 4 | +1.38% | 75.0% | 2 | +3.19% |
+| Vicinanza max/min 200gg | vicino minimo 200gg | 7 | 2 | -0.97% | 0.0% | 1 | +0.33% |
+
+La RS reale conferma la stessa direzione del proxy usato in Parte 2 (RS
+positiva → rendimento successivo migliore). Il combo "sopra SMA20 + RSI≥50
++ RS5 positiva" è il pattern con il miglior compromesso N/effetto visto
+finora in tutto il backtest (N=65-97, non solo 15-20 come gli altri) — resta
+comunque **DA VERIFICARE**, non INFORMATIVO, per la stessa finestra di
+mercato corta (6-7 giornate) che vale per tutto il resto di questo report.
+Vicinanza a massimo/minimo 200gg: N troppo piccolo (7 casi) per dire
+qualcosa.
+
 ## Osservazione qualitativa (non una conclusione)
 
 Direzione coerente con un'intuizione da manuale (segue-trend, non
@@ -117,9 +146,11 @@ quando la finestra si allarga.
 
 ## Prossimo passo
 
-Ri-eseguire `scripts/backtest_indicatori.sql` + `scripts/backtest_indicatori_parte2.sql`
+Ri-eseguire `scripts/backtest_indicatori.sql` + `_parte2.sql` + `_parte3.sql`
 tra 2-3 settimane (per +10d utilizzabile) e tra 5-6 settimane (per +20d) —
-avanzando le date hardcoded negli script (`2025-06-01`/`2026-01-01`) alla
-finestra corrente. Nessuna modifica alla pipeline operativa finché il
-backtest non è concluso, come da vincolo esplicito del protocollo
+avanzando le date hardcoded negli script alla finestra corrente. Storico
+indici (`^GSPC`, `FTSEMIB.MI`) va ricaricato periodicamente con
+`load_historical_data.py --scope=indices` se si vuole tenerlo aggiornato
+oltre i 2 anni iniziali. Nessuna modifica alla pipeline operativa finché
+il backtest non è concluso, come da vincolo esplicito del protocollo
 (Sezione 16).
