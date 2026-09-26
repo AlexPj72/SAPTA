@@ -33,9 +33,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send'
 
         $reply = gemini_chat_with_tools($to_send);
         if ($reply === null) {
-            $error = GEMINI_API_KEY
+            $error = (GEMINI_CHAT_API_KEY || GEMINI_API_KEY)
                 ? "La Chat AI non ha risposto (errore di rete o quota Gemini esaurita). Riprova tra poco."
-                : "Chat AI non configurata: manca la chiave Gemini in config.php (GEMINI_API_KEY).";
+                : "Chat AI non configurata: manca la chiave Gemini in config.php (GEMINI_API_KEY o GEMINI_CHAT_API_KEY).";
             array_pop($_SESSION['chat_history']); // non teniamo il messaggio senza risposta
         } else {
             $_SESSION['chat_history'][] = ['role' => 'model', 'text' => $reply];

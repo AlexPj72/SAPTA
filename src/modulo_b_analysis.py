@@ -142,6 +142,7 @@ def get_latest_intraday_price(ticker):
 
 DAILY_BATCH_SIZE = 20  # ticker per chiamata yf.download, stesso principio di load_historical_data.py
 DAILY_BATCH_SLEEP_SECONDS = 2
+GEMINI_CALL_SLEEP_SECONDS = 3  # pausa dopo ogni chiamata a run_ai_agent (Modulo I)
 
 
 def fetch_daily_batch(tickers):
@@ -352,9 +353,10 @@ GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini
 def run_ai_agent(ticker, indicators, sentiment, context_score, news_light_count, has_earnings):
     """[Modulo I - SAPTA_v4.md §3] Terzo canale indipendente: riceve gli stessi
     dati grezzi di Modulo B ma NON il verdetto/score di B, e ragiona in autonomia
-    via LLM gratuito (Gemini 2.5 Flash, Google AI Studio - free tier, nessuna
-    carta richiesta). Scrive in ai_agent_decisions, tabella parallela a
-    signals_raw - non influenza in alcun modo il filtro di Modulo E.
+    via LLM gratuito (Gemini 3.1 Flash Lite, Google AI Studio - free tier,
+    nessuna carta richiesta; il modello è stato aggiornato il 14/09, questo
+    docstring era rimasto disallineato). Scrive in ai_agent_decisions, tabella
+    parallela a signals_raw - non influenza in alcun modo il filtro di Modulo E.
     Anticipato dalla Fase 7 (dove nasce nella spec) su richiesta esplicita utente."""
     if not GEMINI_API_KEY:
         return  # secret non configurato, salta silenziosamente senza bloccare Modulo B
@@ -401,7 +403,7 @@ SOLO con un oggetto JSON, nessun altro testo, in questo formato esatto:
         supabase.table('ai_agent_decisions').insert({
             'ticker': ticker,
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'model_used': 'gemini-2.5-flash',
+            'model_used': 'gemini-3.1-flash-lite',
             'ai_decision': parsed.get('decision', 'HOLD'),
             'ai_confidence': float(parsed.get('confidence', 0.5)),
             'ai_reasoning': parsed.get('reasoning', ''),
@@ -594,6 +596,14 @@ if __name__ == "__main__":
             n_signal_written += 1
             run_ai_agent(ticker, indicators, sentiment, candidate.get('context_score'),
                          candidate.get('news_light_count'), earnings_soon)
+            # [FIX 26/09] Pausa dopo ogni chiamata Gemini: la stessa chiave è
+            # condivisa con AI Watch, Briefing e la Chat AI interattiva della
+            # dashboard (dashboard/chat.php) - segnalato dall'utente come
+            # "la chat finisce subito i token/quota". Senza pausa, più segnali
+            # scritti nello stesso run chiamano Gemini a raffica (stesso
+            # difetto già corretto per yf.download in fetch_daily_batch),
+            # consumando la quota al minuto prima che l'utente apra la chat.
+            time.sleep(GEMINI_CALL_SLEEP_SECONDS)
 
         if not args.force_reprocess:
             mark_processed(candidate['id'])

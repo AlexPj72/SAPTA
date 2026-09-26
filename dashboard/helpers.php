@@ -356,7 +356,11 @@ function chat_tool_dispatch($name, $args) {
  * poi si ferma e risponde con quello che ha (mai un loop infinito).
  */
 function gemini_chat_with_tools($history) {
-    if (!GEMINI_API_KEY) return null;
+    // [FIX 26/09] Usa la chiave dedicata se configurata, altrimenti quella
+    // condivisa con i moduli automatici (comportamento invariato se
+    // GEMINI_CHAT_API_KEY è lasciata vuota in config.php).
+    $api_key = GEMINI_CHAT_API_KEY ?: GEMINI_API_KEY;
+    if (!$api_key) return null;
 
     $contents = array_map(fn($h) => ['role' => $h['role'], 'parts' => [['text' => $h['text']]]], $history);
     $max_rounds = 4;
@@ -365,7 +369,7 @@ function gemini_chat_with_tools($history) {
         $ch = curl_init('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent');
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['x-goog-api-key: ' . GEMINI_API_KEY, 'Content-Type: application/json']);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['x-goog-api-key: ' . $api_key, 'Content-Type: application/json']);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['contents' => $contents, 'tools' => chat_tools_schema()]));
         curl_setopt($ch, CURLOPT_TIMEOUT, 30);
         $response = curl_exec($ch);
