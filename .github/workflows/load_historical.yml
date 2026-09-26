@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: 'base (2 anni, tutto l''universo) o extended (storico esteso, 18 ticker per stress test)'
+        description: 'base (2 anni, tutto l''universo), extended (storico esteso, 18 ticker stress test) o indices (solo ^GSPC/FTSEMIB.MI, per Relative Strength)'
         required: true
         type: choice
         options:
           - base
           - extended
+          - indices
         default: base
 
 jobs:

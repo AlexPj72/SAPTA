@@ -134,15 +134,25 @@ def fetch_and_write(tickers, period=None, start=None, label=""):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--scope', choices=['base', 'extended'], required=True)
+    parser.add_argument('--scope', choices=['base', 'extended', 'indices'], required=True)
     args = parser.parse_args()
 
     print(f"🚀 Caricamento storico ({args.scope}): {datetime.now(timezone.utc).isoformat()}")
 
     if args.scope == 'base':
         total, failed = fetch_and_write(UNIVERSE_FULL, period="2y", label="base-2y")
-    else:
+    elif args.scope == 'extended':
         total, failed = fetch_and_write(STRESS_TEST_SUBSET, start=EXTENDED_START_DATE, label="extended")
+    else:
+        # [NUOVO 26/09] Storico giornaliero per i 2 indici di riferimento
+        # (^GSPC, FTSEMIB.MI) — modulo_a_ingestion.py li scarica già ogni
+        # 15 minuti (interval='15m') dal 18/09, ma NON esiste storico
+        # giornaliero (interval='1d'): serve per calcolare una Relative
+        # Strength vera nel backtest indicatori (fino ad ora si usava un
+        # proxy cross-sezionale US/IT, vedi BACKTEST_INDICATORI_REPORT.md).
+        # Scope separato e leggero (2 ticker) per non dover rilanciare il
+        # caricamento base da 136 ticker solo per questo.
+        total, failed = fetch_and_write(["^GSPC", "FTSEMIB.MI"], period="2y", label="indici-2y")
 
     print(f"\n📊 Totale barre scritte: {total}")
     if failed:
