@@ -396,3 +396,21 @@ Query in `scripts/backtest_indicatori_parte3.sql`, risultati in `BACKTEST_INDICA
 6. Pagina/endpoint con commit hash + data deploy visibile sulla dashboard, per individuare in un colpo d'occhio disallineamenti come quello di index.php di oggi.
 
 ---
+
+## Sessione 26/09/2026 (parte 2) – Claude: due bug reali trovati facendo le 5 analisi proposte
+
+L'utente ha chiesto di fare tutte e 5 le analisi proposte, partendo dalla prima. Risultato: **2 bug operativi reali trovati e corretti**, non solo backtest.
+
+### Bug 1 (commit bc26626): il fix del 24/09 non bastava
+Verificato prima di procedere: 79 candidati promossi a B dal 24/09, tutti processati, ancora ZERO righe in signals_raw. Causa: bug nel mio stesso fix del 24/09. `fetch_daily_batch()` aveva un ramo `elif len(batch) == 1: result[batch[0]] = df` che assumeva colonne piatte per una lista di un ticker - falso, yf.download() con group_by='ticker' ritorna sempre MultiIndex quando l'argomento è una lista, indipendentemente dalla lunghezza. Con i run ogni 15-30 min, molti run avevano esattamente 1 candidato nuovo → KeyError silenzioso su df['Close']. Corretto con lo stesso controllo già collaudato in modulo_a_ingestion.py: `isinstance(df.columns, pd.MultiIndex)`. Lanciato sapta_slow via API per verificare - nessun candidato nuovo in quel run specifico (dipende dal mercato), verifica rimandata al prossimo segnale reale.
+
+### Bug 2 (commit deb9460): ordine sbagliato in sapta_us_close.yml
+Investigando il punto 2 (calibrazione soglie AI Watch): `ai_watch_daily_stats` sempre vuota (0 righe) e `ai_hypotheses.eod_direction_held` sempre NULL dal 19/09, nonostante il workflow risultasse sempre "success". Causa: "Update Daily Prices" (scrive la chiusura di oggi in prezzi) girava DOPO "Modulo EOD Verify" invece che prima - EOD Verify cercava una chiusura che non esisteva ancora in quel momento del workflow, usciva sempre subito senza scrivere nulla. Stesso bug bloccava anche `modulo_experimental_rule.py` (stessa dipendenza da prezzi interval=1d), quindi anche `experimental_rule_candidates` era sempre vuota (0 righe) dal 20/09. Un solo fix (riordino step) risolve entrambi. Effetto visibile solo dal prossimo sapta_us_close (lunedì, mercati chiusi nel weekend).
+
+### Punto 5 (hit-rate per metadati pipeline) - fatto, non bloccato
+data_quality_flag: 270/276 eventi 'ok', nessun campione su altri flag. liquidity_bucket: 264/270 LIQ_HIGH, N troppo piccolo per MEDIUM/LOW. **Settore**: Technology (N=101) il migliore (+0.71%/53.8% a 1d, +2.42% a 3d), Consumer Cyclical (N=28-37) nettamente il peggiore (28.6% positivi a 1d) - il taglio più solido e "gratuito" di tutto il backtest (già nei metadati, nessun indicatore tecnico serve). Query in scripts/backtest_indicatori_parte4_settori.sql, risultati in BACKTEST_INDICATORI_REPORT.md sezione "Parte 4". Ancora DA VERIFICARE per la finestra di mercato corta, come tutto il resto.
+
+### Punti 1, 2, 3, 4 delle 5 analisi proposte: bloccati fino a lunedì
+Punto 1 (backtest final_rank_score): signals_filtered ancora ferma all'11/09, zero dati nuovi da quando il bug 1 è stato corretto - serve che la pipeline produca un vero segnale prima di poter backtestare il punteggio. Punto 2 (calibrazione soglie AI Watch) e punto 3 (Modulo I vs esito reale) e punto 4 (regola sperimentale vs H1): tutti bloccati dal bug 2, effetto visibile solo dal prossimo sapta_us_close di lunedì.
+
+---

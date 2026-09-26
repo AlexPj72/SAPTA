@@ -134,6 +134,41 @@ mercato corta (6-7 giornate) che vale per tutto il resto di questo report.
 Vicinanza a massimo/minimo 200gg: N troppo piccolo (7 casi) per dire
 qualcosa.
 
+## Parte 4 (26/09) — Hit-rate per data_quality_flag, liquidity_bucket, settore
+
+Query in `scripts/backtest_indicatori_parte4_settori.sql`. Non fa parte del
+protocollo originale — è il punto 5 delle analisi proposte da Claude lo
+stesso giorno ("cosa nei metadati della pipeline correla con l'esito?").
+
+`data_quality_flag`: **270/276 eventi hanno flag 'ok'**, nessun campione
+utile su 'stale'/'zero_volume' — l'universo attuale non genera abbastanza
+dati di bassa qualità per dire se il flag funziona da filtro utile.
+`liquidity_bucket`: **264/270 eventi sono LIQ_HIGH** — solo 6 in
+MEDIUM/LOW combinati, N troppo piccolo per confrontare (N=5 e N=1).
+L'universo attuale è di fatto quasi tutto alta liquidità: questo split
+non aggiunge informazione con la composizione attuale dell'universo.
+
+**Settore** (unico taglio di questa parte con N sufficiente su più
+gruppi):
+
+| Settore | N | N+1d | Media+1d | %pos+1d | N+3d | Media+3d |
+|---|--:|--:|--:|--:|--:|--:|
+| Technology | 101 | 65 | +0.71% | 53.8% | 26 | +2.42% |
+| Consumer Cyclical | 37 | 28 | -1.12% | 28.6% | 7 | -0.65% |
+| Communication Services | 31 | 23 | -0.35% | 52.2% | 8 | -0.58% |
+| Financial Services | 28 | 16 | -0.24% | 50.0% | 8 | -0.56% |
+| Healthcare | 25 | 15 | +0.13% | 60.0% | 7 | +0.30% |
+| Industrials | 24 | 14 | -0.69% | 35.7% | 6 | -0.78% |
+| Energy | 11 | 10 | +0.61% | 80.0% | 6 | -0.23% |
+
+Technology è il settore più rappresentato (101/276, oltre un terzo di
+tutto il campione) e anche quello con il risultato migliore; Consumer
+Cyclical è nettamente il peggiore (28.6% positivi a +1d, N=28-37 —
+campione più solido di molti indicatori tecnici visti in questo report).
+Ancora **DA VERIFICARE**, non una conclusione — ma è il taglio più
+"actionable" di questa parte 4, perché il settore non richiede nessun
+indicatore tecnico aggiuntivo: è già nei metadati di ogni candidato.
+
 ## Osservazione qualitativa (non una conclusione)
 
 Direzione coerente con un'intuizione da manuale (segue-trend, non
