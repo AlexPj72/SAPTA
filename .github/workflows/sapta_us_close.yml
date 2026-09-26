@@ -47,6 +47,12 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python src/modulo_e_cost_filter.py --market=USA
 
+      - name: Update Daily Prices - aggiornamento incrementale 1d (NUOVO 22/09 - fix audit)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/update_daily_prices.py
+
       - name: Run Modulo EOD Verify - Verifica esiti reali AI Watch (NUOVO 19/09)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -58,9 +64,3 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python src/modulo_experimental_rule.py
-
-      - name: Update Daily Prices - aggiornamento incrementale 1d (NUOVO 22/09 - fix audit)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python src/update_daily_prices.py
