@@ -30,10 +30,15 @@ MA (SMA20/50/200, solo trend sopra/sotto), RSI14, ATR14/ATR%, Bollinger
 (posizione nella banda), ROC5, volatilità storica 20d (calcolata, non ancora
 usata per raggruppare).
 
-**Non ancora implementati** (rimandati, vedi `chatgpt_implementazione.md`
-sessione 24/09): MACD (serve EMA ricorsiva), ADX (serve smoothing +DM/-DM a
-più stadi), Relative Strength vs indice/settore, Gap, Supporti/resistenze,
-combinazioni a 2-3 indicatori.
+**Implementati in Parte 2** (stesso giorno): MACD, ADX, Relative Strength
+(proxy cross-sezionale, non indice reale), Gap, Supporti/resistenze 50gg,
+2 combinazioni a 2 condizioni — vedi tabella sotto.
+
+**Ancora non implementato**: Relative Strength vs un indice reale (servirebbe
+scaricare ^GSPC/FTSEMIB e salvarli in `prezzi`, non fattibile dall'ambiente
+di sviluppo per limiti di rete — andrebbe fatto da GitHub Actions), Relative
+Strength vs settore (serve un indice/media per settore da `ticker_sectors`),
+combinazioni a 3 condizioni, supporti/resistenze a 20/200gg (solo 50gg fatto).
 
 ## Risultati (baseline + singoli indicatori, +1d e +3d)
 
@@ -57,6 +62,49 @@ combinazioni a 2-3 indicatori.
 | ROC5 | negativo | 73 | -0.48% | 45.2% | 20 | -0.90% | 25.0% | DA VERIFICARE |
 | +5d / +10d / +20d | tutti i gruppi | 0 | — | — | — | — | — | **DATA_UNAVAILABLE** |
 
+## Parte 2 (stesso giorno, 24/09) — MACD, ADX, Relative Strength, Gap, Supporti/Resistenze, combinazioni
+
+Query in `scripts/backtest_indicatori_parte2.sql`. MACD e ADX usano una
+finestra storica più corta (125 giorni di borsa invece di 1 anno) perché il
+calcolo richiede una CTE ricorsiva (EMA/Wilder smoothing) che su 88 ticker
+a 1 anno va in timeout — vedi nota tecnica in testa allo script. Relative
+Strength è un **proxy**: rendimento medio cross-sezionale del gruppo di
+mercato (US vs IT, split per suffisso `.MI`), non un indice reale — in
+Supabase non ci sono dati di indice (^GSPC, FTSEMIB) da usare come
+benchmark.
+
+| Gruppo | Condizione | N | Media +1d | %pos +1d | N +3d | Media +3d |
+|---|---|--:|--:|--:|--:|--:|
+| MACD | histogram positivo (sopra signal) | 73 | +0.42% | 58.9% | 33 | +1.59% |
+| MACD | histogram negativo (sotto signal) | 99 | -0.31% | 41.4% | 33 | -0.01% |
+| ADX | <20 (trend debole) | 63 | +0.34% | 50.8% | 25 | +1.95% |
+| ADX | 20-40 | 109 | -0.20% | 47.7% | 41 | +0.08% |
+| ADX | >40 (trend forte) | 0 | — | — | — | — |
+| Relative Strength 5d | positiva (batte il mercato) | 98 | +0.38% | 52.0% | 46 | +1.52% |
+| Relative Strength 5d | negativa (sotto il mercato) | 74 | -0.50% | 44.6% | 20 | -0.90% |
+| Gap apertura | gap up (>0.5%) | 63 | -0.23% | 47.6% | 26 | +1.62% |
+| Gap apertura | gap down (<-0.5%) | 31 | +0.09% | 51.6% | 8 | -0.05% |
+| Gap apertura | nessun gap rilevante | 78 | +0.15% | 48.7% | 32 | +0.33% |
+| Vicinanza max 50gg | vicino (entro 1%) | 13 | +0.19% | 46.2% | 4 | +1.60% |
+| Vicinanza max 50gg | lontano | 159 | -0.02% | 49.1% | 62 | +0.74% |
+| Vicinanza min 50gg | vicino (entro 1%) | 8 | -1.16% | 12.5% | 4 | -2.49% |
+| Vicinanza min 50gg | lontano | 164 | +0.06% | 50.6% | 62 | +1.00% |
+| Combo SMA20+RSI | sopra SMA20 + RSI>70 | 22 | +1.68% | 58.8% | 8 | +4.92% |
+| Combo SMA20+RSI | sopra SMA20 + RSI 50-70 | 66 | +0.11% | 54.2% | 25 | +0.91% |
+| Combo SMA20+RSI | sotto SMA20 + RSI<30 | 54 | -0.61% | 53.8% | 12 | -1.14% |
+| Combo SMA20+RSI | sotto SMA20 + RSI 30-50 | 69 | -0.06% | 38.3% | 13 | +0.61% |
+| Combo Bollinger+ROC5 | banda bassa + ROC5 neg | 80 | -0.60% | 42.6% | 17 | -1.00% |
+| Combo Bollinger+ROC5 | banda alta + ROC5 pos | 45 | +0.75% | 51.4% | 16 | +2.28% |
+| Combo Bollinger+ROC5 | centrale + ROC5 pos | 80 | +0.14% | 51.6% | 30 | +1.12% |
+
+Tutto **DA VERIFICARE** per gli stessi motivi della Parte 1 (N piccolo dopo
+lo split, eventi concentrati in poche giornate di mercato non indipendenti).
+Il pattern più consistente sui due tagli (indicatore singolo e in
+combinazione) resta "sopra SMA20 + RSI>70": +1.68%/+58.8% a +1d, +4.92%/+8
+casi a +3d — ma N=17-22 è ancora un campione minuscolo, non una conclusione.
+ADX>40 non ha N: nessun evento del campione ha mostrato un trend così forte
+in questa finestra.
+
 ## Osservazione qualitativa (non una conclusione)
 
 Direzione coerente con un'intuizione da manuale (segue-trend, non
@@ -69,8 +117,9 @@ quando la finestra si allarga.
 
 ## Prossimo passo
 
-Ri-eseguire `scripts/backtest_indicatori.sql` tra 2-3 settimane (per +10d
-utilizzabile) e tra 5-6 settimane (per +20d). Nel frattempo, se richiesto,
-implementare MACD/ADX/Relative Strength/Gap/combinazioni. Nessuna modifica
-alla pipeline operativa finché il backtest non è concluso, come da vincolo
-esplicito del protocollo (Sezione 16).
+Ri-eseguire `scripts/backtest_indicatori.sql` + `scripts/backtest_indicatori_parte2.sql`
+tra 2-3 settimane (per +10d utilizzabile) e tra 5-6 settimane (per +20d) —
+avanzando le date hardcoded negli script (`2025-06-01`/`2026-01-01`) alla
+finestra corrente. Nessuna modifica alla pipeline operativa finché il
+backtest non è concluso, come da vincolo esplicito del protocollo
+(Sezione 16).

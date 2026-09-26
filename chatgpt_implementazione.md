@@ -354,3 +354,20 @@ L'utente ha portato un protocollo dettagliato (16 sezioni) per testare se indica
 Ri-eseguire la stessa query tra 2-3 settimane (per avere +10d) e 5-6 settimane (per +20d). Se richiesto dall'utente, implementare gli indicatori mancanti (MACD/ADX/Relative Strength/Gap) e le combinazioni a 2-3 condizioni prima del prossimo giro. Nessuna modifica alla pipeline operativa nel frattempo.
 
 ---
+
+## Sessione 24/09/2026 (parte 3) – Claude: MACD, ADX, Relative Strength, Gap, Supporti/resistenze, combinazioni
+
+Completati gli indicatori rimandati nella parte 2 dello stesso giorno, su richiesta esplicita dell'utente ("implementa"). Risultati in `BACKTEST_INDICATORI_REPORT.md` sezione "Parte 2", query in `scripts/backtest_indicatori_parte2.sql`.
+
+### Nota tecnica (da ricordare per i prossimi run)
+MACD e ADX richiedono EMA/Wilder smoothing = CTE ricorsiva riga per riga. Su 88 ticker con la finestra a 1 anno usata per RSI/SMA, la ricorsione andava sistematicamente in timeout (anche con `SET statement_timeout` alto - il collo di bottiglia sembra essere il gateway del connettore Supabase, non Postgres). Risolto con: (1) `CREATE TEMP TABLE` indicizzata su (ticker, rn) prima della ricorsione - senza indice ogni passo ricorsivo riscansiona l'intera CTE precedente, O(n^2) per ticker; (2) finestra ridotta a 125 giorni di borsa invece di 1 anno (EMA12/26 e Wilder-14 convergono in ~50-100 barre, non serve 1 anno come per SMA200). Ogni CREATE TEMP TABLE e la ricorsione che la usa devono stare nella stessa chiamata SQL - le temp table non sopravvivono tra chiamate diverse (sessioni diverse).
+
+Relative Strength implementata come proxy (rendimento medio cross-sezionale US/IT per suffisso ticker, non un indice reale) perché Supabase non ha dati di indice (^GSPC, FTSEMIB) - andrebbero scaricati da GitHub Actions (rete non disponibile dall'ambiente di sviluppo Claude) e salvati in `prezzi`.
+
+### Risultato
+Pattern più consistente: "sopra SMA20 + RSI>70" (N=17-22, +1.68%/+58.8% a +1d, +4.92% a +3d con N=8) - ma resta DA VERIFICARE, non INFORMATIVO, per N piccolo e finestra di mercato corta. ADX>40: zero eventi nel campione.
+
+### Non ancora fatto
+Relative Strength vs indice reale o vs settore, combinazioni a 3 condizioni, supporti/resistenze a 20/200gg.
+
+---
