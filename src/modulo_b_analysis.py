@@ -159,7 +159,26 @@ def fetch_daily_batch(tickers):
     mai avuto questo problema perché scaricano già a batch (rispettivamente
     un'unica chiamata multi-ticker e blocchi da 20 con sleep(2) tra un
     blocco e l'altro) - stesso pattern replicato qui.
-    Ritorna {ticker: DataFrame} solo per i ticker con dati validi."""
+    Ritorna {ticker: DataFrame} solo per i ticker con dati validi.
+
+    [FIX 26/09] Il ramo 'elif len(batch) == 1' era un bug: yf.download()
+    con group_by='ticker' ritorna colonne MultiIndex (ticker, campo)
+    quando l'argomento è una LISTA, indipendentemente dalla sua lunghezza
+    - anche per una lista di un solo elemento. Il codice assumeva invece
+    che una lista di lunghezza 1 desse colonne piatte come per un ticker
+    singolo passato come stringa, il che è falso. Risultato osservato:
+    quando un run di Modulo B aveva esattamente un candidato nuovo da
+    processare (frequente: i run sono ogni 15-30 min, spesso con 0-1
+    candidati), fetch_daily_batch riceveva una lista di un ticker,
+    imboccava il ramo sbagliato, e calculate_technical_indicators falliva
+    con KeyError su df['Close'] (colonna reale: (ticker, 'Close')) -
+    fallimento silenzioso identico a quello risolto il 24/09, stessa
+    conseguenza (zero righe in signals_raw), causa diversa. Confermato
+    su Supabase: 79 candidati promossi a B dal 24/09, 79 processati,
+    ancora zero segnali - il fix del 24/09 non bastava. Corretto usando
+    lo stesso controllo già collaudato in modulo_a_ingestion.py
+    (reconcile_prices): isinstance(df.columns, pd.MultiIndex), non la
+    lunghezza della lista."""
     result = {}
     tickers = list(dict.fromkeys(tickers))  # dedup preservando l'ordine
     for i in range(0, len(tickers), DAILY_BATCH_SIZE):
@@ -169,7 +188,10 @@ def fetch_daily_batch(tickers):
                               auto_adjust=True, progress=False)
             if df.empty:
                 print(f"⚠️ Batch giornaliero vuoto per {batch}")
-            elif len(batch) == 1:
+            elif not isinstance(df.columns, pd.MultiIndex):
+                # Difesa in profondità: se yfinance dovesse mai restituire
+                # colonne piatte (comportamento osservato solo passando UNA
+                # STRINGA, non una lista, ma mai fare affidamento su questo).
                 result[batch[0]] = df
             else:
                 for t in batch:
