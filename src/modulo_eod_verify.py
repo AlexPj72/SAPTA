@@ -30,18 +30,19 @@ from datetime import datetime, timezone
 from config import supabase
 
 
-def get_today_closes():
-    """Chiusure di oggi per tutto l'universo, una sola query invece di una
-    per ticker (stesso pattern già usato in modulo_briefing.py)."""
-    today = datetime.now(timezone.utc).date().isoformat()
+def get_closes_for_date(target_date):
+    """Chiusure per una data specifica (non necessariamente 'oggi' - vedi
+    fix 29/09) per tutto l'universo, una sola query invece di una per
+    ticker (stesso pattern già usato in modulo_briefing.py)."""
     try:
         response = (supabase.table('prezzi')
                     .select('ticker,timestamp,close')
                     .eq('interval', '1d')
-                    .gte('timestamp', today + 'T00:00:00')
+                    .gte('timestamp', target_date + 'T00:00:00')
+                    .lt('timestamp', target_date + 'T23:59:59')
                     .execute())
     except Exception as e:
-        print(f"⚠️ Errore lettura chiusure di oggi: {e}")
+        print(f"⚠️ Errore lettura chiusure del {target_date}: {e}")
         return {}
     closes = {}
     for row in response.data or []:
@@ -51,27 +52,52 @@ def get_today_closes():
     return closes
 
 
-def run_eod_verify():
-    print("📊 Modulo EOD Verify: avvio...")
-    today = datetime.now(timezone.utc).date().isoformat()
+def get_pending_dates():
+    """[FIX 29/09] Prima si usava datetime.now(timezone.utc).date() come
+    'oggi' sia per filtrare le ipotesi da verificare sia per cercare la
+    chiusura in prezzi. Bug: il workflow sapta_us_close è schedulato alle
+    21:30 UTC ma GitHub a volte lo ritarda oltre mezzanotte UTC (osservato:
+    run delle ipotesi del 28/09 partito alle 01:05 UTC del 29/09) - a quel
+    punto 'oggi' per lo script diventava 29/09, mentre le ipotesi da
+    verificare erano del 28/09: zero righe trovate, zero statistiche
+    scritte, per settimane (dal 19/09). Fix: non usare mai l'orologio di
+    sistema per decidere quale giornata verificare - si cercano invece le
+    date con ipotesi ancora non verificate (eod_direction_held is null),
+    qualunque esse siano. Gestisce anche un eventuale arretrato (più
+    giornate mai verificate) in un solo run, invece di una sola volta."""
+    try:
+        rows = (supabase.table('ai_hypotheses')
+                .select('hypothesis_date')
+                .is_('eod_direction_held', 'null')
+                .not_.is_('entry_price', 'null')
+                .execute())
+    except Exception as e:
+        print(f"⚠️ Errore lettura date in sospeso: {e}")
+        return []
+    return sorted({row['hypothesis_date'] for row in (rows.data or []) if row.get('hypothesis_date')})
+
+
+def run_eod_verify_for_date(target_date):
+    print(f"📊 Modulo EOD Verify: verifica ipotesi del {target_date}...")
 
     try:
         rows = (supabase.table('ai_hypotheses')
                 .select('id,ticker,price_change_pct,entry_price,tipo_anomalia')
-                .eq('hypothesis_date', today)
+                .eq('hypothesis_date', target_date)
+                .is_('eod_direction_held', 'null')
                 .execute())
         hypotheses = rows.data or []
     except Exception as e:
-        print(f"⚠️ Errore lettura ipotesi di oggi: {e}")
+        print(f"⚠️ Errore lettura ipotesi del {target_date}: {e}")
         return
 
     if not hypotheses:
-        print("   Nessuna ipotesi da verificare oggi.")
+        print("   Nessuna ipotesi da verificare per questa data.")
         return
 
-    closes = get_today_closes()
+    closes = get_closes_for_date(target_date)
     if not closes:
-        print("   Nessuna chiusura disponibile, riprovo al prossimo giro utile.")
+        print(f"   Nessuna chiusura disponibile per il {target_date}, riprovo al prossimo giro utile.")
         return
 
     stats = {'totale': 0, 'confermata': 0}
@@ -118,7 +144,7 @@ def run_eod_verify():
 
     try:
         supabase.table('ai_watch_daily_stats').insert({
-            'stat_date': today,
+            'stat_date': target_date,
             'n_totale': stats['totale'],
             'n_direzione_confermata': stats['confermata'],
             'n_prezzo': per_tipo['prezzo'][0], 'n_prezzo_confermata': per_tipo['prezzo'][1],
@@ -129,8 +155,12 @@ def run_eod_verify():
         # probabile giá presente (unique su stat_date) se il job viene rilanciato manualmente
         print(f"⚠️ Statistiche giornaliere non salvate (probabile duplicato): {e}")
 
-    print("✅ EOD Verify completato")
+    print(f"✅ EOD Verify completato per il {target_date}")
 
 
 if __name__ == "__main__":
-    run_eod_verify()
+    pending = get_pending_dates()
+    if not pending:
+        print("📊 Modulo EOD Verify: nessuna data in sospeso da verificare.")
+    for d in pending:
+        run_eod_verify_for_date(d)
