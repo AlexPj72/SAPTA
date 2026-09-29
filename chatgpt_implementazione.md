@@ -414,3 +414,15 @@ data_quality_flag: 270/276 eventi 'ok', nessun campione su altri flag. liquidity
 Punto 1 (backtest final_rank_score): signals_filtered ancora ferma all'11/09, zero dati nuovi da quando il bug 1 è stato corretto - serve che la pipeline produca un vero segnale prima di poter backtestare il punteggio. Punto 2 (calibrazione soglie AI Watch) e punto 3 (Modulo I vs esito reale) e punto 4 (regola sperimentale vs H1): tutti bloccati dal bug 2, effetto visibile solo dal prossimo sapta_us_close di lunedì.
 
 ---
+
+## Sessione 28/09/2026 – Claude: cleanup dati intraday mai partito (segnalato da analisi esterna)
+
+L'utente ha portato una diagnosi (di un'altra AI) su un fallimento del run sapta_fast di oggi: timeout pip su python-dateutil (transitorio, non un bug SAPTA), e una incongruenza notata di passaggio nello step di cleanup (condizione schedule mai vera). Claude ha verificato entrambe sul repo reale e trovato che il problema era più profondo di una semplice incongruenza:
+
+- `src/cleanup_old_data.py` **non esisteva nel repo**, nonostante fosse referenziato in sapta_fast.yml da settimane.
+- La condizione `github.event.schedule == '0 20 * * *'` non poteva mai essere vera (l'unico cron di sapta_fast.yml è `*/15 9-17 * * 1-5`).
+- Risultato: nessuna pulizia dei dati intraday (interval='15m') è mai avvenuta dal 18/09 - la tabella prezzi cresceva senza limiti.
+
+Fix (commit 44c99f9): creato `src/cleanup_old_data.py` (cancella solo interval='15m' più vecchio di 14gg, mai interval='1d'); nuovo workflow dedicato `sapta_cleanup.yml` con cron proprio (0 20 * * 1-5); rimosso lo step morto da sapta_fast.yml; aggiunto `--retries 5 --timeout 60` a `pip install` in tutti i workflow del repo per resistere a timeout PyPI transitori come quello di oggi. Testato con workflow_dispatch manuale: eseguito con successo, confermato su Supabase che ora restano solo dati dal 15/09 in poi (14 giorni esatti).
+
+---
