@@ -21,7 +21,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install minimal dependency
-        run: pip install supabase==2.31.0
+        run: pip install --retries 5 --timeout 60 supabase==2.31.0
 
       - name: Ping Supabase
         env:

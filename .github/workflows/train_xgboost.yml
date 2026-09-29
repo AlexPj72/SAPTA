@@ -21,7 +21,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install -r requirements-slow.txt
+        run: pip install --retries 5 --timeout 60 -r requirements-slow.txt
 
       - name: Run training
         env:
