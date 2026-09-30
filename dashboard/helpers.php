@@ -199,6 +199,11 @@ function market_direction_badge($pct, $label) {
  * solo USA (nessun suffisso) e Italia/Milano (suffisso .MI) - nessun
  * titolo di Londra o altre piazze europee al momento, quindi solo 2 casi.
  */
+// [FIX 30/09 - handoff Codex] Valuta per ticker: .MI = EUR, altrimenti USD (non piu' EUR per tutti).
+function currency_symbol($ticker) {
+    return str_ends_with($ticker, '.MI') ? '€' : '$';
+}
+
 function market_flag($ticker) {
     if (str_ends_with($ticker, '.MI')) return '🇮🇹';
     return '🇺🇸';
