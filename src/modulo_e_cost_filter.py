@@ -153,6 +153,22 @@ def calculate_expected_return(price, confidence_multiplier, atr, costs, quantity
     }
 
 
+def get_usd_per_eur():
+    """[FIX 30/09 - handoff Codex] Dollari per 1 EUR (Yahoo EURUSD=X, ultima
+    chiusura disponibile). NON e' un feed FX tick-by-tick: cambio indicativo,
+    non operativo real-time. None se non disponibile/non plausibile."""
+    try:
+        import yfinance as yf
+        hist = yf.Ticker('EURUSD=X').history(period='5d')['Close'].dropna()
+        fx = float(hist.iloc[-1])
+        if 0.5 < fx < 2.0:
+            return fx
+        print(f"⚠️ Cambio EURUSD non plausibile: {fx}")
+    except Exception as e:
+        print(f"⚠️ Cambio EURUSD non disponibile: {e}")
+    return None
+
+
 def calculate_position_size(entry_price, invalidation_price, capital, risk_percent=RISK_PER_TRADE_PERCENT):
     """
     [Sezione 13 - SOSTITUISCE la vecchia formula capitale*2%/(ATR*2)]
@@ -309,6 +325,11 @@ def filter_signals(tickers_filter=None):
                           if s.get('screening_candidate_id')}
         candidates_map = get_screening_candidates_map(candidate_ids)
 
+        # [FIX 30/09] Cambio USD/EUR letto una sola volta, solo se serve.
+        from universe import UNIVERSE_USA
+        usd_per_eur = get_usd_per_eur() if any(
+            s_['ticker'] in UNIVERSE_USA for s_ in signals_to_process) else None
+
         for signal in signals_to_process:
             ticker = signal['ticker']
             price = signal.get('close_price')
@@ -325,12 +346,26 @@ def filter_signals(tickers_filter=None):
 
             # [Sezione 13] Se manca invalidation_price (es. azione HOLD, o
             # deterioramento già scartato da B), niente size, niente filtro E
-            position_size = calculate_position_size(price, invalidation_price, current_capital)
-            if position_size is None and signal['action'] != 'HOLD':
+            # [FIX 30/09 - handoff Codex] Unita' esplicite:
+            #   quantity = numero di azioni; countervalue = quantity * prezzo.
+            # Capitale in EUR, prezzo nella valuta del titolo (USD per USA).
+            fx_to_eur = 1.0  # EUR per 1 unita' di valuta del prezzo
+            if ticker in UNIVERSE_USA:
+                if not usd_per_eur:
+                    print(f"⚠️ {ticker}: cambio USD/EUR non disponibile, salto (ritentato al prossimo run)")
+                    continue
+                fx_to_eur = 1.0 / usd_per_eur
+            capital_local = current_capital / fx_to_eur
+            quantity = calculate_position_size(price, invalidation_price, capital_local)
+            if quantity is None and signal['action'] != 'HOLD':
                 print(f"⚠️ {ticker}: manca invalidation_price, impossibile dimensionare - salto")
                 continue
-
-            quantity = position_size / price if position_size else 0
+            quantity = quantity or 0
+            countervalue_eur = quantity * price * fx_to_eur
+            if countervalue_eur > current_capital:  # mai oltre il capitale disponibile
+                quantity = capital_local / price
+                countervalue_eur = current_capital
+            position_size = round(countervalue_eur, 2) if quantity else None  # EUR (vedi check_portfolio_exposure)
             returns = calculate_expected_return(price, confidence_multiplier, atr, costs, max(quantity, 1), liquidity_bucket)
 
             threshold_net = 0.005
@@ -355,7 +390,7 @@ def filter_signals(tickers_filter=None):
             # [Sezione 15 - NUOVO 16/09] Esposizione totale stimata di portafoglio,
             # controllata solo se il segnale è ancora BUY dopo il filtro settoriale.
             if filter_passed and filtered_action == 'BUY':
-                new_position_eur = (position_size or 0) * price
+                new_position_eur = countervalue_eur
                 exposure_ok, exposure_pct = check_portfolio_exposure(
                     new_position_eur, current_capital, SECTOR_EXPOSURE_LOOKBACK_DAYS,
                     MAX_PORTFOLIO_EXPOSURE_PERCENT
@@ -382,7 +417,7 @@ def filter_signals(tickers_filter=None):
                     risk_penalty=exposure_pct,
                 )
 
-            supabase.table('signals_filtered').insert({
+            row_filtered = {
                 'timestamp': signal['timestamp'],
                 'ticker': ticker,
                 'original_action': signal['action'],
@@ -403,7 +438,14 @@ def filter_signals(tickers_filter=None):
                 'sector_concentration_count': sector_count,
                 'portfolio_exposure_pct': round(exposure_pct, 4),
                 'final_rank_score': final_rank_score,
-            }).execute()
+            }
+            try:
+                res_f = supabase.table('signals_filtered').insert(row_filtered).execute()
+                if not getattr(res_f, 'data', None):
+                    raise RuntimeError("scrittura non confermata dal DB (nessuna riga restituita)")
+            except Exception as e:
+                print(f"❌ {ticker}: scrittura signals_filtered fallita: {e} - ritentato al prossimo run")
+                continue
 
             status = "✅ APPROVATO" if filter_passed else f"❌ DECLASSATO ({filter_reason})"
             rank_info = f" | rank={final_rank_score}" if final_rank_score is not None else ""
