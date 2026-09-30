@@ -227,8 +227,19 @@ def calculate_technical_indicators(ticker, daily_df=None):
             return None
 
         df['RSI'] = ta.rsi(df['Close'], length=14)
-        df['MACD'], df['MACD_signal'], _ = ta.macd(df['Close'])
-        df['BB_upper'], df['BB_middle'], df['BB_lower'] = ta.bbands(df['Close'], length=20)
+        # [FIX 30/09 - handoff Codex] ta.macd/ta.bbands ritornano DataFrame
+        # (bbands: 5 colonne BBL/BBM/BBU/BBB/BBP; macd: MACD/MACDh/MACDs),
+        # non tuple da spacchettare. Estrazione per nome, mai per posizione.
+        macd = ta.macd(df['Close'])
+        bb = ta.bbands(df['Close'], length=20)
+        if macd is None or bb is None:
+            print(f"⚠️ {ticker}: indicatori MACD/BB non calcolabili (None)")
+            return None
+        df['MACD'] = macd.filter(regex=r'^MACD_').iloc[:, 0]
+        df['MACD_signal'] = macd.filter(regex=r'^MACDs_').iloc[:, 0]
+        df['BB_lower'] = bb.filter(regex=r'^BBL_').iloc[:, 0]
+        df['BB_middle'] = bb.filter(regex=r'^BBM_').iloc[:, 0]
+        df['BB_upper'] = bb.filter(regex=r'^BBU_').iloc[:, 0]
         df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
         last_bar_date = df.index[-1].date()
