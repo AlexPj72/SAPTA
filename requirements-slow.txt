@@ -3,6 +3,6 @@ pandas==2.2.2
 numpy==2.0.2
 requests==2.32.3
 supabase==2.31.0
-pandas-ta-classic
+pandas-ta-classic==0.8.32
 scikit-learn==1.5.0
 xgboost==2.0.3
