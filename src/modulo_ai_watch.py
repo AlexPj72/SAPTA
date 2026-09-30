@@ -40,7 +40,7 @@ import os
 import json
 import smtplib
 from email.mime.text import MIMEText
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import requests
 from config import supabase, GEMINI_API_KEY
 from universe import get_universe
@@ -148,6 +148,12 @@ def classify_anomaly(volume_ratio, price_change_pct):
     return 'debole'       # nessuno dei due sopra soglia singolarmente
 
 
+# [FIX 30/09 - handoff Codex] Un segnale e' "attivo" solo se approvato dal
+# filtro E, non HOLD e recente: senza finestra un vecchio BUY/SELL veniva
+# presentato come ancora valido.
+ACTIVE_SIGNAL_MAX_AGE_MINUTES = 35
+
+
 def get_active_signal(ticker):
     """[NUOVO 19/09] Se esiste già un segnale operativo reale (Modulo E) per
     questo ticker, ritorna i suoi livelli VERI (target/invalidazione) invece
@@ -157,6 +163,9 @@ def get_active_signal(ticker):
                 .select('filtered_action,target_price,invalidation_price,timestamp')
                 .eq('ticker', ticker)
                 .neq('filtered_action', 'HOLD')
+                .eq('filter_passed', True)
+                .gte('timestamp', (datetime.now(timezone.utc)
+                                   - timedelta(minutes=ACTIVE_SIGNAL_MAX_AGE_MINUTES)).isoformat())
                 .order('timestamp', desc=True)
                 .limit(1)
                 .execute())
@@ -313,16 +322,29 @@ def call_gemini_watch(metrics):
         return []
 
 
+ALERT_DELIVERY_FAILED = False
+
+
 def send_telegram(text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
     try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True},
-            timeout=15,
-        )
-        return r.status_code == 200
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        for payload in (
+            {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True},
+            # fallback: Markdown rifiutato (caratteri speciali) -> testo semplice
+            {"chat_id": TELEGRAM_CHAT_ID, "text": text.replace('*', ''), "disable_web_page_preview": True},
+        ):
+            r = requests.post(url, json=payload, timeout=15)
+            try:
+                ok = bool(r.json().get('ok'))
+                detail = r.json().get('description')
+            except Exception:
+                ok, detail = False, r.text[:200]
+            if r.status_code == 200 and ok:
+                return True
+            print(f"⚠️ Telegram NON confermato: HTTP {r.status_code} - {detail}")
+        return False
     except Exception as e:
         print(f"⚠️ Errore invio Telegram: {e}")
         return False
@@ -449,6 +471,11 @@ def run_ai_watch():
     tg_ok = send_telegram(message)
     email_ok = send_email("SAPTA - Nuove ipotesi da valutare", message.replace('*', ''))
     print(f"   Telegram: {'inviato' if tg_ok else 'saltato/fallito'} · Email: {'inviata' if email_ok else 'saltata/fallita'}")
+    global ALERT_DELIVERY_FAILED
+    if (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID and not tg_ok) or \
+       (SMTP_HOST and SMTP_USER and SMTP_PASSWORD and ALERT_EMAIL_TO and not email_ok):
+        ALERT_DELIVERY_FAILED = True
+        print("❌ ALERT NON CONSEGNATO su almeno un canale configurato (controllare secret Telegram/SMTP)")
 
     if tg_ok or email_ok:
         for i in new_items:
@@ -464,3 +491,5 @@ def run_ai_watch():
 
 if __name__ == "__main__":
     run_ai_watch()
+    if ALERT_DELIVERY_FAILED:
+        raise SystemExit(1)
