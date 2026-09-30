@@ -86,6 +86,7 @@ $market = market_status($ticker);
     <title>SAPTA — <?= e($ticker) ?></title>
     <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
+    <script>window.SAPTA_CURRENCY = <?= json_encode(currency_symbol($ticker)) ?>;</script>
     <script src="assets/chart.umd.min.js"></script>
     <script src="assets/charts.js"></script>
 </head>
@@ -151,8 +152,8 @@ $market = market_status($ticker);
         <div id="dailyChartError" class="chart-error" style="display:none; margin-top:10px;">⚠️ Il grafico non si è caricato (Chart.js non disponibile). Prova a ricaricare la pagina; se il problema resta, segnalalo.</div>
         <div class="chart-legend-row">
             <span><i style="background:#4f46e5"></i> Prezzo di chiusura</span>
-            <?php if ($target_price): ?><span><i style="background:#16a34a"></i> Target €<?= number_format($target_price, 2) ?></span><?php endif; ?>
-            <?php if ($invalidation_price): ?><span><i style="background:#dc2626"></i> Invalidazione €<?= number_format($invalidation_price, 2) ?></span><?php endif; ?>
+            <?php if ($target_price): ?><span><i style="background:#16a34a"></i> Target <?= currency_symbol($ticker) ?><?= number_format($target_price, 2) ?></span><?php endif; ?>
+            <?php if ($invalidation_price): ?><span><i style="background:#dc2626"></i> Invalidazione <?= currency_symbol($ticker) ?><?= number_format($invalidation_price, 2) ?></span><?php endif; ?>
         </div>
     <?php endif; ?>
 </section>
