@@ -221,9 +221,9 @@ def calculate_technical_indicators(ticker, daily_df=None):
             print(f"⚠️ {ticker}: nessun dato giornaliero disponibile (60d/1d) - "
                   f"nessun indicatore calcolabile, candidato scartato senza segnale")
             return None
-        if len(df) < 31:
+        if len(df) < 35:
             print(f"⚠️ {ticker}: solo {len(df)} barre giornaliere ricevute da yfinance "
-                  f"(soglia minima 31 per RSI/MACD/BBands) - candidato scartato senza segnale")
+                  f"(soglia minima 35 per RSI/MACD 12-26-9/BBands sulla penultima barra) - candidato scartato senza segnale")
             return None
 
         df['RSI'] = ta.rsi(df['Close'], length=14)
@@ -246,6 +246,18 @@ def calculate_technical_indicators(ticker, daily_df=None):
         today_utc = datetime.now(timezone.utc).date()
         is_provisional = (last_bar_date == today_utc)
         row = df.iloc[-2] if is_provisional else df.iloc[-1]
+
+        # [FIX 30/09 - handoff Codex] Indicatori NaN/inf o degeneri = errore
+        # tecnico (candidato da ritentare), mai un segnale con valori sporchi.
+        import math
+        needed = ['RSI', 'MACD', 'MACD_signal', 'BB_lower', 'BB_upper', 'ATR', 'Close']
+        vals = {k: float(row[k]) for k in needed}
+        if any(not math.isfinite(v) for v in vals.values()):
+            print(f"⚠️ {ticker}: indicatori non finiti (NaN/inf) - errore tecnico, verra ritentato")
+            return None
+        if vals['BB_upper'] <= vals['BB_lower'] or vals['ATR'] <= 0:
+            print(f"⚠️ {ticker}: indicatori degeneri (BB piatte o ATR<=0) - errore tecnico, verra ritentato")
+            return None
 
         current_price = get_latest_intraday_price(ticker) or float(df.iloc[-1]['Close'])
 
@@ -534,7 +546,7 @@ def mark_processed(candidate_id):
 
 def write_signal(ticker, candidate_id, signal):
     try:
-        supabase.table('signals_raw').insert({
+        res = supabase.table('signals_raw').insert({
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'ticker': ticker,
             'screening_candidate_id': candidate_id,
@@ -554,11 +566,17 @@ def write_signal(ticker, candidate_id, signal):
             'target_reason': signal['target_reason'],
             'model_version': 'v5.1.1_rule_based',
         }).execute()
+        # [FIX 30/09 - handoff Codex] Scritto = il DB ha restituito un id.
+        if not getattr(res, 'data', None) or not res.data[0].get('id'):
+            print(f"❌ Scrittura signals_raw {ticker} non confermata dal DB (nessun id restituito)")
+            return False
         flag = " (barra provvisoria)" if signal['is_provisional_bar'] else ""
         print(f"✅ {ticker}: {signal['action']} [{signal['opportunity_type']}] "
               f"conf={signal['confidence_level']}{flag}")
+        return True
     except Exception as e:
         print(f"❌ Errore scrittura segnale {ticker}: {e}")
+        return False
 
 
 if __name__ == "__main__":
@@ -587,6 +605,7 @@ if __name__ == "__main__":
     n_no_indicators = 0
     n_deterioramento = 0
     n_signal_written = 0
+    n_write_failed = 0
 
     for candidate in candidates:
         ticker = candidate['ticker']
@@ -595,8 +614,9 @@ if __name__ == "__main__":
 
         indicators = calculate_technical_indicators(ticker, daily_data.get(ticker))
         if not indicators:
+            # [FIX 30/09 - handoff Codex] Errore tecnico: NON marcare processato,
+            # il candidato viene ritentato al run successivo.
             n_no_indicators += 1
-            mark_processed(candidate['id'])
             continue
 
         cached = get_cached_news(ticker)
@@ -616,6 +636,7 @@ if __name__ == "__main__":
         )
 
         if signal['opportunity_type'] == 'deterioramento_strutturale':
+            # Scarto STRATEGICO: decisione prevista dalla strategia, si marca processato.
             n_deterioramento += 1
             try:
                 supabase.table('screening_candidates').update({
@@ -625,7 +646,10 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"⚠️ Errore aggiornamento status per {ticker}: {e}")
         else:
-            write_signal(ticker, candidate['id'], signal)
+            if not write_signal(ticker, candidate['id'], signal):
+                # Scrittura fallita: NON marcare processato, retry al prossimo run.
+                n_write_failed += 1
+                continue
             n_signal_written += 1
             run_ai_agent(ticker, indicators, sentiment, candidate.get('context_score'),
                          candidate.get('news_light_count'), earnings_soon)
@@ -644,7 +668,8 @@ if __name__ == "__main__":
     print(f"\n📋 Riepilogo run: {n_totale} candidati letti · "
           f"{n_no_indicators} scartati per indicatori tecnici non disponibili (yfinance) · "
           f"{n_deterioramento} scartati per deterioramento strutturale · "
-          f"{n_signal_written} segnali scritti su signals_raw")
+          f"{n_signal_written} segnali scritti su signals_raw · "
+          f"{n_write_failed} scritture fallite (da ritentare)")
     if n_totale > 0 and n_signal_written == 0:
         print("⚠️ ATTENZIONE: nessun segnale scritto in questo run nonostante candidati presenti - "
               "controllare la riga 'scartati per indicatori tecnici' qui sopra. Se tutti i candidati "
