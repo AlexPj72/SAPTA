@@ -11,7 +11,11 @@ if (typeof Chart !== 'undefined') {
     Chart.defaults.color = '#6b7280';
 }
 
-function eurTick(value) { return '€' + value.toLocaleString('it-IT', {maximumFractionDigits: 0}); }
+// [FIX 30/09 - handoff Codex] Prima maximumFractionDigits:0 -> titoli da pochi euro
+// (4,25 / 4,50) mostravano solo interi. Simbolo valuta da window.SAPTA_CURRENCY (default €).
+function currencySymbol() { return window.SAPTA_CURRENCY || '€'; }
+function priceDecimals(value) { return Math.abs(value) >= 1000 ? 0 : 2; }
+function eurTick(value) { const d = priceDecimals(value); return currencySymbol() + value.toLocaleString('it-IT', {minimumFractionDigits: d, maximumFractionDigits: d}); }
 function pctTick(value) { return value.toLocaleString('it-IT', {maximumFractionDigits: 0}) + '%'; }
 
 // Mostra al massimo ~10 etichette sull'asse X per non affollarlo
@@ -26,7 +30,7 @@ function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel,
     const tickFn = unit === 'pct' ? pctTick : eurTick;
     const fmtValue = (v) => unit === 'pct'
         ? v.toLocaleString('it-IT', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + '%'
-        : '€' + v.toLocaleString('it-IT', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        : currencySymbol() + v.toLocaleString('it-IT', {minimumFractionDigits: 2, maximumFractionDigits: 2});
     const el = document.getElementById(canvasId);
     if (!el || !values.length) return;
 
@@ -74,7 +78,7 @@ function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel,
             },
             scales: {
                 x: { grid: { display: false }, ticks: sparseTicks(labels) },
-                y: { grid: { color: '#eef0f5' }, ticks: { callback: tickFn }, title: { display: true, text: unit === 'pct' ? 'Percentuale' : 'Prezzo (EUR/USD)' } }
+                y: { grid: { color: '#eef0f5' }, ticks: { callback: tickFn }, title: { display: true, text: unit === 'pct' ? 'Percentuale' : 'Prezzo (' + (currencySymbol() === '$' ? 'USD' : 'EUR') + ')' } }
             }
         }
     });
