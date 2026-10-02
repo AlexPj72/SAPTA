@@ -268,7 +268,14 @@ def calculate_technical_indicators(ticker, daily_df=None):
             'bb_position': (float(row['Close']) - float(row['BB_lower'])) / (float(row['BB_upper']) - float(row['BB_lower'])),
             'atr': float(row['ATR']),
             'close': current_price,
-            'is_provisional_bar': is_provisional
+            'is_provisional_bar': is_provisional,
+            # [NUOVO 01/10 - persistenza indicatori] Solo per tracciabilita':
+            # non entrano in nessuna regola di decisione.
+            'bb_lower': float(row['BB_lower']),
+            'bb_upper': float(row['BB_upper']),
+            'daily_close': float(row['Close']),
+            'daily_bar_date': (df.index[-2] if is_provisional else df.index[-1]).date().isoformat(),
+            'daily_bars_used': int(len(df)),
         }
     except Exception as e:
         print(f"❌ Errore indicatori {ticker}: {type(e).__name__}: {e}")
@@ -305,10 +312,14 @@ def has_upcoming_earnings(ticker, horizon_days=EARNINGS_HORIZON_DAYS):
 # NUOVO v5.1.1 — Confidenza esplicita (Sezione 11)
 # ============================================================
 
-def compute_confidence(indicators, sentiment, context_score):
+def compute_confidence_detail(indicators, sentiment, context_score):
     """Conta quanti segnali di contesto convergono nella stessa direzione.
     Placeholder ragionevole, NON calibrato - vedi v5.1.1 §28 alert 4:
-    va validato con backtest walk-forward, non lasciato fisso per assunzione."""
+    va validato con backtest walk-forward, non lasciato fisso per assunzione.
+
+    [01/10] Stessa identica logica di prima, ma ritorna anche i segnali e
+    l'accordo, cosi' da poterli salvare in signals_raw.decision_detail.
+    compute_confidence() qui sotto resta con la firma e il risultato di sempre."""
     signals = []
     if context_score is not None and abs(context_score) > 0.05:
         signals.append(1 if context_score > 0 else -1)
@@ -321,7 +332,7 @@ def compute_confidence(indicators, sentiment, context_score):
         signals.append(-1)
 
     if not signals:
-        return 'basso', 0
+        return {'level': 'basso', 'net': 0, 'agreement': None, 'signals': []}
 
     net = sum(signals)
     agreement = max(signals.count(1), signals.count(-1)) / len(signals)
@@ -332,7 +343,12 @@ def compute_confidence(indicators, sentiment, context_score):
         level = 'medio'
     else:
         level = 'basso'
-    return level, net
+    return {'level': level, 'net': net, 'agreement': agreement, 'signals': signals}
+
+
+def compute_confidence(indicators, sentiment, context_score):
+    d = compute_confidence_detail(indicators, sentiment, context_score)
+    return d['level'], d['net']
 
 
 # ============================================================
@@ -459,19 +475,22 @@ SOLO con un oggetto JSON, nessun altro testo, in questo formato esatto:
 
 
 def generate_signal(indicators, sentiment, context_score, news_light_count, has_earnings):
-    score = 0
+    # [01/10] Stessa aritmetica di prima: le componenti sono solo registrate
+    # a parte per poterle salvare (score_total = somma delle componenti).
+    score_rsi = 0
     if indicators['rsi'] < 30:
-        score += 2
+        score_rsi = 2
     elif indicators['rsi'] > 70:
-        score -= 2
-    score += 1 if indicators['macd'] > indicators['macd_signal'] else -1
+        score_rsi = -2
+    score_macd = 1 if indicators['macd'] > indicators['macd_signal'] else -1
+    score_bb = 0
     if indicators['bb_position'] < 0.2:
-        score += 1
+        score_bb = 1
     elif indicators['bb_position'] > 0.8:
-        score -= 1
-    score += int(sentiment * 2)
-    if context_score is not None:
-        score += int(context_score * 2)
+        score_bb = -1
+    score_sentiment = int(sentiment * 2)
+    score_context = int(context_score * 2) if context_score is not None else 0
+    score = score_rsi + score_macd + score_bb + score_sentiment + score_context
 
     if score >= 2:
         action = 'BUY'
@@ -480,15 +499,41 @@ def generate_signal(indicators, sentiment, context_score, news_light_count, has_
     else:
         action = 'HOLD'
 
-    confidence_level, net_signal = compute_confidence(indicators, sentiment, context_score)
+    conf = compute_confidence_detail(indicators, sentiment, context_score)
+    confidence_level, net_signal = conf['level'], conf['net']
     confidence_multiplier = CONFIDENCE_MULTIPLIER.get(confidence_level, 0.4)
     opportunity_type = classify_opportunity(indicators, context_score, news_light_count, has_earnings, net_signal)
     invalidation_price, invalidation_reason = compute_invalidation(action, indicators['close'], indicators['atr'])
     target_price, target_reason = compute_target(action, indicators['close'], indicators['atr'])
     risk_score = min(1.0, indicators['atr'] / indicators['close'] * 10)
+    final_action = action if opportunity_type != 'deterioramento_strutturale' else 'HOLD'
+
+    decision_detail = {
+        'rules_version': 'v5.1.1_rule_based',
+        'score': {'rsi': score_rsi, 'macd': score_macd, 'bb': score_bb,
+                  'sentiment': score_sentiment, 'context': score_context, 'total': score},
+        'thresholds': {'buy_if_score_gte': 2, 'sell_if_score_lte': -2,
+                       'rsi_oversold': 30, 'rsi_overbought': 70, 'bb_low': 0.2, 'bb_high': 0.8},
+        'inputs': {
+            'rsi': indicators['rsi'], 'macd': indicators['macd'], 'macd_signal': indicators['macd_signal'],
+            'bb_position': indicators['bb_position'],
+            'bb_lower': indicators.get('bb_lower'), 'bb_upper': indicators.get('bb_upper'),
+            'atr': indicators['atr'], 'price_used': indicators['close'],
+            'daily_close': indicators.get('daily_close'), 'daily_bar_date': indicators.get('daily_bar_date'),
+            'daily_bars_used': indicators.get('daily_bars_used'),
+            'is_provisional_bar': indicators['is_provisional_bar'],
+            'sentiment': sentiment, 'context_score': context_score,
+            'news_light_count': news_light_count, 'has_earnings': has_earnings,
+        },
+        'confidence': {'level': confidence_level, 'net': net_signal,
+                       'agreement': conf['agreement'], 'signals': conf['signals']},
+        'opportunity_type': opportunity_type,
+        'action_from_score': action,
+        'action_final': final_action,
+    }
 
     return {
-        'action': action if opportunity_type != 'deterioramento_strutturale' else 'HOLD',
+        'action': final_action,
         'confidence_score': min(0.9, 0.5 + abs(score) * 0.1),
         'confidence_level': confidence_level,
         'confidence_multiplier': confidence_multiplier,
@@ -502,6 +547,18 @@ def generate_signal(indicators, sentiment, context_score, news_light_count, has_
         'invalidation_reason': invalidation_reason,
         'target_price': target_price,
         'target_reason': target_reason,
+        # [NUOVO 01/10 - persistenza indicatori]
+        'score_total': score,
+        'score_rsi': score_rsi,
+        'score_macd': score_macd,
+        'score_bb': score_bb,
+        'score_sentiment': score_sentiment,
+        'score_context': score_context,
+        'sentiment_value': sentiment,
+        'context_score': context_score,
+        'news_light_count': news_light_count,
+        'indicators': indicators,
+        'decision_detail': decision_detail,
     }
 
 
@@ -544,28 +601,68 @@ def mark_processed(candidate_id):
         print(f"⚠️ Errore aggiornamento b_processed_at per candidato {candidate_id}: {e}")
 
 
+def _fit_numeric(value, precision, scale):
+    """Arrotonda a `scale` decimali; se il valore non entra nella colonna
+    numeric(precision, scale) ritorna None invece di far fallire l'insert
+    (il valore esatto resta comunque in decision_detail)."""
+    if value is None:
+        return None
+    try:
+        v = round(float(value), scale)
+    except (TypeError, ValueError):
+        return None
+    return v if abs(v) < 10 ** (precision - scale) else None
+
+
+def build_raw_row(ticker, candidate_id, signal):
+    """Riga di signals_raw (separata da write_signal per poterla testare)."""
+    ind = signal.get('indicators') or {}
+    return {
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'ticker': ticker,
+        'screening_candidate_id': candidate_id,
+        'action': signal['action'],
+        'confidence_score': signal['confidence_score'],
+        'confidence_level': signal['confidence_level'],
+        'confidence_multiplier': signal['confidence_multiplier'],
+        'opportunity_type': signal['opportunity_type'],
+        'risk_score': signal['risk_score'],
+        'atr': signal['atr'],
+        'close_price': signal['close_price'],
+        'is_provisional_bar': signal['is_provisional_bar'],
+        'has_upcoming_earnings': signal['has_upcoming_earnings'],
+        'invalidation_price': signal['invalidation_price'],
+        'invalidation_reason': signal['invalidation_reason'],
+        'target_price': signal['target_price'],
+        'target_reason': signal['target_reason'],
+        'model_version': 'v5.1.1_rule_based',
+        # [NUOVO 01/10 - persistenza indicatori] colonne gia' esistenti ma mai scritte
+        'rsi': _fit_numeric(ind.get('rsi'), 6, 3),
+        'macd': _fit_numeric(ind.get('macd'), 10, 5),
+        'macd_signal': _fit_numeric(ind.get('macd_signal'), 10, 5),
+        'bb_position': _fit_numeric(ind.get('bb_position'), 6, 4),
+        # colonne nuove
+        'score_total': signal.get('score_total'),
+        'score_rsi': signal.get('score_rsi'),
+        'score_macd': signal.get('score_macd'),
+        'score_bb': signal.get('score_bb'),
+        'score_sentiment': signal.get('score_sentiment'),
+        'score_context': signal.get('score_context'),
+        'sentiment_value': signal.get('sentiment_value'),
+        'context_score': signal.get('context_score'),
+        'news_light_count': signal.get('news_light_count'),
+        'bb_lower': ind.get('bb_lower'),
+        'bb_upper': ind.get('bb_upper'),
+        'daily_close': ind.get('daily_close'),
+        'daily_bar_date': ind.get('daily_bar_date'),
+        'daily_bars_used': ind.get('daily_bars_used'),
+        'decision_detail': signal.get('decision_detail'),
+    }
+
+
 def write_signal(ticker, candidate_id, signal):
     try:
-        res = supabase.table('signals_raw').insert({
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'ticker': ticker,
-            'screening_candidate_id': candidate_id,
-            'action': signal['action'],
-            'confidence_score': signal['confidence_score'],
-            'confidence_level': signal['confidence_level'],
-            'confidence_multiplier': signal['confidence_multiplier'],
-            'opportunity_type': signal['opportunity_type'],
-            'risk_score': signal['risk_score'],
-            'atr': signal['atr'],
-            'close_price': signal['close_price'],
-            'is_provisional_bar': signal['is_provisional_bar'],
-            'has_upcoming_earnings': signal['has_upcoming_earnings'],
-            'invalidation_price': signal['invalidation_price'],
-            'invalidation_reason': signal['invalidation_reason'],
-            'target_price': signal['target_price'],
-            'target_reason': signal['target_reason'],
-            'model_version': 'v5.1.1_rule_based',
-        }).execute()
+        res = supabase.table('signals_raw').insert(build_raw_row(ticker, candidate_id, signal)).execute()
         # [FIX 30/09 - handoff Codex] Scritto = il DB ha restituito un id.
         if not getattr(res, 'data', None) or not res.data[0].get('id'):
             print(f"❌ Scrittura signals_raw {ticker} non confermata dal DB (nessun id restituito)")
