@@ -293,6 +293,33 @@ def compute_final_rank_score(anomaly_score, context_score, confidence_multiplier
     return round(score * 100, 2)
 
 
+def _norm_ts(value):
+    """Timestamp ISO -> datetime UTC confrontabile (i formati di Supabase
+    possono differire per separatore/offset ma indicano lo stesso istante)."""
+    try:
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def get_already_evaluated(threshold):
+    """[NUOVO 01/10 - idempotenza] Ritorna (ids, coppie) dei segnali grezzi che
+    hanno gia' una riga in signals_filtered: per raw_signal_id, e - per le righe
+    storiche senza id - per (ticker, timestamp). Se la query fallisce solleva
+    l'eccezione: meglio saltare il run che scrivere duplicati."""
+    resp = supabase.table('signals_filtered').select('raw_signal_id,ticker,timestamp') \
+        .gte('timestamp', threshold).execute()
+    ids = {r['raw_signal_id'] for r in (resp.data or []) if r.get('raw_signal_id') is not None}
+    pairs = {(r['ticker'], _norm_ts(r['timestamp'])) for r in (resp.data or [])
+             if r.get('raw_signal_id') is None}
+    return ids, pairs
+
+
+def _is_unique_violation(exc):
+    msg = str(exc).lower()
+    return '23505' in msg or 'duplicate key' in msg or 'unique constraint' in msg
+
+
 def filter_signals(tickers_filter=None):
     try:
         threshold = (datetime.now(timezone.utc) - timedelta(minutes=35)).isoformat()
@@ -307,6 +334,24 @@ def filter_signals(tickers_filter=None):
             if not signals_to_process:
                 print(f"⚠️ Nessun segnale grezzo recente per i ticker richiesti")
                 return
+
+        # [NUOVO 01/10 - idempotenza] Un solo risultato E per segnale grezzo.
+        # sapta_slow gira ogni 15 minuti e la finestra e' di 35: senza questo
+        # controllo ogni segnale veniva rivalutato 2-4 volte (e il controllo di
+        # esposizione contava anche i propri duplicati). La logica decisionale
+        # non cambia: si evita solo di rivalutare cio' che e' gia' stato valutato.
+        done_ids, done_pairs = get_already_evaluated(threshold)
+        n_before = len(signals_to_process)
+        signals_to_process = [
+            s_ for s_ in signals_to_process
+            if s_['id'] not in done_ids and (s_['ticker'], _norm_ts(s_['timestamp'])) not in done_pairs
+        ]
+        n_skipped = n_before - len(signals_to_process)
+        if n_skipped:
+            print(f"ℹ️ {n_skipped} segnali grezzi già valutati in precedenza: saltati (idempotenza)")
+        if not signals_to_process:
+            print("✅ Nessun segnale nuovo da valutare")
+            return
 
         costs = get_broker_costs()
         if not costs:
@@ -418,6 +463,7 @@ def filter_signals(tickers_filter=None):
                 )
 
             row_filtered = {
+                'raw_signal_id': signal['id'],
                 'timestamp': signal['timestamp'],
                 'ticker': ticker,
                 'original_action': signal['action'],
@@ -444,6 +490,10 @@ def filter_signals(tickers_filter=None):
                 if not getattr(res_f, 'data', None):
                     raise RuntimeError("scrittura non confermata dal DB (nessuna riga restituita)")
             except Exception as e:
+                if _is_unique_violation(e):
+                    # valutato nel frattempo da un altro run: non e' un errore
+                    print(f"ℹ️ {ticker}: già valutato da un altro run (vincolo di unicità), salto")
+                    continue
                 print(f"❌ {ticker}: scrittura signals_filtered fallita: {e} - ritentato al prossimo run")
                 continue
 
