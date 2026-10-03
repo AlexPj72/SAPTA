@@ -103,6 +103,26 @@ def get_broker_costs(broker='Alpaca', mercato='USA'):
         return None
 
 
+# [NUOVO 03/10] Costi per mercato: titoli USA -> riga Alpaca/USA, titoli italiani (.MI) ->
+# riga Interactive Brokers/EU. Prima TUTTI i ticker usavano la riga USA (zero commissioni).
+# Formula, soglie e filtro restano identici: cambia solo QUALE riga di costi_operazione si usa.
+COST_ROW_BY_MARKET = {
+    'USA': ('Alpaca', 'USA'),
+    'EU': ('Interactive Brokers', 'EU'),
+}
+
+
+def market_for_ticker(ticker):
+    """'USA' se il ticker e' nell'universo USA, altrimenti 'EU' (tutti gli altri sono titoli italiani .MI)."""
+    from universe import UNIVERSE_USA
+    return 'USA' if ticker in UNIVERSE_USA else 'EU'
+
+
+def get_costs_by_market():
+    """Una riga di costi per mercato (None se mancante o non attiva)."""
+    return {m: get_broker_costs(broker=b, mercato=mk) for m, (b, mk) in COST_ROW_BY_MARKET.items()}
+
+
 def get_ticker_sector_and_liquidity(ticker):
     """[v5.1.1] Legge da ticker_sectors (128 ticker) invece di SECTOR_MAP."""
     try:
@@ -353,8 +373,8 @@ def filter_signals(tickers_filter=None):
             print("✅ Nessun segnale nuovo da valutare")
             return
 
-        costs = get_broker_costs()
-        if not costs:
+        costs_by_market = get_costs_by_market()
+        if not any(costs_by_market.values()):
             print("❌ Costi broker non configurati")
             return
 
@@ -411,6 +431,10 @@ def filter_signals(tickers_filter=None):
                 quantity = capital_local / price
                 countervalue_eur = current_capital
             position_size = round(countervalue_eur, 2) if quantity else None  # EUR (vedi check_portfolio_exposure)
+            costs = costs_by_market.get(market_for_ticker(ticker))
+            if not costs:
+                print(f"⚠️ {ticker}: costi di mercato {market_for_ticker(ticker)} non configurati - salto (ritentato al prossimo run)")
+                continue
             returns = calculate_expected_return(price, confidence_multiplier, atr, costs, max(quantity, 1), liquidity_bucket)
 
             threshold_net = 0.005
