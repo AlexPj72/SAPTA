@@ -30,7 +30,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install --retries 5 --timeout 60 -r requirements-slow.txt
 
+      - name: Run Modulo H - Anomaly + Context (H2)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_h_anomaly.py --stage=h2
+
       - name: Run Modulo B - Analysis & Signals (sentiment via HF Inference API)
+        if: ${{ !cancelled() }}  # B parte anche se H2 fallisce (come prima: B non dipendeva da H2)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -38,13 +45,7 @@ jobs:
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python src/modulo_b_analysis.py
-        
-      - name: Run Modulo H - Anomaly + Context (H2)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python src/modulo_h_anomaly.py --stage=h2
-        
+
       - name: Run Modulo E - Cost Filter
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
