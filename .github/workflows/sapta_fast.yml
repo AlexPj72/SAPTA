@@ -60,3 +60,11 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
         run: python src/modulo_ai_watch.py
+
+      - name: Run Modulo T - State machine operativa (PAPER, nessun messaggio, nessuna operazione di portafoglio)
+        if: ${{ !cancelled() }}   # parte anche se AI Watch esce con errore (es. SMTP)
+        continue-on-error: true   # un problema di T non deve mai bloccare ingestione, H1 o AI Watch
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_t_state_machine.py
