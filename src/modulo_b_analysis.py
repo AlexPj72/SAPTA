@@ -75,13 +75,24 @@ def analyze_sentiment_hf(text, max_retries=2):
         return 0.0
     headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
     payload = {"inputs": text[:512]}
+
+    # Ritenta solo quando il servizio segnala esplicitamente che il modello
+    # è temporaneamente in caricamento (HTTP 503). Errori DNS/rete/autenticazione
+    # non diventano tre tentativi per ogni articolo: il sentiment torna a 0.0
+    # e Module B continua con gli altri segnali.
     for attempt in range(max_retries + 1):
         try:
             r = requests.post(FINBERT_API_URL, headers=headers, json=payload, timeout=15)
             if r.status_code == 503:
-                wait = min(r.json().get('estimated_time', 5), 20)
-                time.sleep(wait)
-                continue
+                try:
+                    wait = min(float(r.json().get('estimated_time', 5)), 20)
+                except (ValueError, TypeError, AttributeError):
+                    wait = 5
+                if attempt < max_retries:
+                    time.sleep(wait)
+                    continue
+                return 0.0
+
             r.raise_for_status()
             result = r.json()[0]
             best = max(result, key=lambda x: x['score'])
@@ -91,9 +102,20 @@ def analyze_sentiment_hf(text, max_retries=2):
             elif label == 'negative':
                 return -score
             return 0.0
-        except Exception as e:
-            print(f"⚠️ Errore HF Inference API (tentativo {attempt+1}): {e}")
-            time.sleep(1)
+
+        except requests.exceptions.ConnectionError as e:
+            print(f"⚠️ HF Inference non raggiungibile: {e} — sentiment=0.0")
+            return 0.0
+        except requests.exceptions.Timeout as e:
+            print(f"⚠️ Timeout HF Inference: {e} — sentiment=0.0")
+            return 0.0
+        except requests.exceptions.HTTPError as e:
+            print(f"⚠️ Errore HTTP HF Inference: {e} — sentiment=0.0")
+            return 0.0
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            print(f"⚠️ Risposta HF Inference non valida: {e} — sentiment=0.0")
+            return 0.0
+
     return 0.0
 
 
