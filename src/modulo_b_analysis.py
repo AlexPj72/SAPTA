@@ -28,7 +28,9 @@ from datetime import datetime, timedelta, timezone
 from config import supabase, NEWSAPI_KEY, HUGGINGFACE_API_KEY, NEWS_CACHE_MINUTES, GEMINI_API_KEY
 from universe import get_universe_metadata
 
-FINBERT_API_URL = "https://api-inference.huggingface.co/models/ProsusAI/finbert"
+# Hugging Face Inference Providers (endpoint attuale).
+# Il vecchio api-inference.huggingface.co non è più l'endpoint da usare.
+FINBERT_API_URL = "https://router.huggingface.co/hf-inference/models/ProsusAI/finbert"
 
 WEIGHTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scoring_weights_v1.json')
 with open(WEIGHTS_PATH) as f:
