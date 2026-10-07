@@ -9,9 +9,13 @@ Prende i segnali BUY approvati da E (signals_filtered.filter_passed) e ne govern
 Regole: specifica v0.3 (D1-D10). Si valutano SOLO candele 15m chiuse; l'ingresso avviene alla chiusura della candela
 (fill = C + slippage); l'evento avverso vince sempre nella stessa candela; nessuna volonta' di inseguire il prezzo.
 
-FASE 4: NESSUN messaggio e NESSUNA operazione sui portafogli. Le intenzioni di operazione (trade_intents) vengono
-registrate con chiave di idempotenza deterministica ma eseguite dall'executor NOT_LINKED (nessun portafoglio toccato).
-In FASE 5 si sostituisce l'executor, la macchina a stati non cambia.
+NESSUNA operazione sui portafogli (FASE 4): le intenzioni di operazione (trade_intents) vengono registrate con chiave
+di idempotenza deterministica ma eseguite dall'executor NOT_LINKED. In FASE 5 si sostituisce l'executor.
+
+NOTIFICHE (FASE 6, solo COMPRA ORA e VENDI ORA): la macchina a stati NON invia nulla. Dopo ogni run, un livello separato
+(sync_alerts/deliver_alerts) guarda gli eventi TRIGGER e EXIT_SIGNAL:* gia' registrati e, per ciascuno, crea UNA riga
+per canale in trade_alerts (UNIQUE) e la consegna. Un errore di invio non tocca mai lo stato dei cicli: l'alert resta
+FAILED e si ritenta (max 5 volte) finche' e' ancora utile (COMPRA ORA 30 min, VENDI ORA 4 ore), poi EXPIRED.
 
 Idempotenza: ogni transizione ha una event_key deterministica (UNIQUE per ciclo); un ciclo per segnale grezzo;
 un solo ciclo aperto per titolo. Rilanciare T, o ripetere un run interrotto a meta', non duplica mai nulla.
@@ -24,6 +28,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import notifications
 from market_calendar import (BAR_MINUTES, CalendarNotVerified, currency_of, is_regular_bar, last_regular_bar_start,
                              local_date, market_of, next_session_close, nth_session_date)
 
@@ -39,6 +44,11 @@ RISK_PER_TRADE_PERCENT = 0.01      # stessa formula di Modulo E (1% del capitale
 PORTFOLIO_CODE = 'PORTAFOGLIO_UTENTE'
 EXECUTOR_MODE = 'NOT_LINKED'       # FASE 4: nessuna operazione di portafoglio
 SIGNAL_LOOKBACK_DAYS = 3
+ALERT_MAX_ATTEMPTS = 5
+ALERT_MAX_AGE_MINUTES = {'COMPRA ORA': 30, 'VENDI ORA': 240}   # oltre, l'alert non e' piu' utile: EXPIRED
+ALERT_EVENT_KINDS = {'TRIGGER': 'COMPRA ORA', 'EXIT_SIGNAL:STOP': 'VENDI ORA', 'EXIT_SIGNAL:TARGET': 'VENDI ORA',
+                     'EXIT_SIGNAL:TEMPO': 'VENDI ORA', 'EXIT_SIGNAL:SEGNALE': 'VENDI ORA'}
+CHANNELS = ('TELEGRAM', 'EMAIL')
 
 OPEN_STATES = ('WATCH', 'ENTRY_PENDING', 'ACTIVE', 'EXIT_PENDING')
 ACTION_LABEL = {'WATCH': 'ATTENDI', 'ENTRY_PENDING': 'COMPRA ORA', 'ACTIVE': 'TIENI', 'EXIT_PENDING': 'VENDI ORA',
@@ -258,6 +268,32 @@ class Store:
         self._t('trade_lifecycle').update(dict(fields, updated_at=_iso(datetime.now(timezone.utc)))).eq('id', lc['id']).execute()
         return dict(lc, **fields)
 
+    def recent_alert_events(self, since):
+        return self._t('trade_events').select('*').in_('event_key', list(ALERT_EVENT_KINDS)).gte('detected_at', _iso(since)).order('id').execute().data or []
+
+    def lifecycle(self, lc_id):
+        r = self._t('trade_lifecycle').select('*').eq('id', lc_id).execute().data or []
+        return r[0] if r else None
+
+    def alerts_of(self, lifecycle_ids):
+        if not lifecycle_ids:
+            return []
+        return self._t('trade_alerts').select('lifecycle_id,event_key,channel').in_('lifecycle_id', list(lifecycle_ids)).execute().data or []
+
+    def insert_alert(self, row):
+        try:
+            return self._t('trade_alerts').insert(row).execute().data[0]
+        except Exception as e:
+            if _is_unique_violation(e):
+                return None                        # gia' presente: nessun doppione
+            raise
+
+    def open_alerts(self):
+        return self._t('trade_alerts').select('*').in_('status', ['PENDING', 'FAILED']).order('id').execute().data or []
+
+    def update_alert(self, alert_id, fields):
+        self._t('trade_alerts').update(dict(fields, updated_at=_iso(datetime.now(timezone.utc)))).eq('id', alert_id).execute()
+
     def run_start(self, mode, dry_run, now):
         if dry_run:
             return None
@@ -285,8 +321,12 @@ def get_usd_per_eur():
 
 # ---------------------------------------------------------------- logica del ciclo
 class Engine:
-    def __init__(self, sb, now, executor=None, dry_run=False, fx_provider=get_usd_per_eur, log=print):
+    def __init__(self, sb, now, executor=None, dry_run=False, fx_provider=get_usd_per_eur, log=print, senders=None):
         self.store, self.now, self.dry_run, self.log = Store(sb), now, dry_run, log
+        # senders: {'TELEGRAM': fn(subject, text) -> (stato, errore), 'EMAIL': ...}: iniettabili nei test
+        self.senders = senders or {'TELEGRAM': lambda subject, text: notifications.send_telegram(text),
+                                   'EMAIL': lambda subject, text: notifications.send_email(subject, text)}
+        self.alert_stats = {'enqueued': 0, 'sent': 0, 'failed': 0, 'expired': 0, 'given_up': 0, 'not_configured': 0}
         self.executor = executor or NotLinkedExecutor()
         self.fx_provider, self._fx = fx_provider, 'unset'
         self.c = {'n_signals_new': 0, 'n_created': 0, 'n_skipped': 0, 'n_evaluated': 0, 'n_transitions': 0, 'n_pending_retry': 0}
@@ -559,29 +599,106 @@ class Engine:
             else:
                 self._finish_exit(lc)
 
+    # -- notifiche: livello SEPARATO dalla macchina a stati (non la modifica, non ne dipende) ----------
+    def sync_alerts(self):
+        """Per ogni evento COMPRA ORA / VENDI ORA recente crea UNA riga per canale in trade_alerts (idempotente)."""
+        events = self.store.recent_alert_events(self.now - timedelta(hours=12))
+        if not events:
+            return
+        have = {(a['lifecycle_id'], a['event_key'], a['channel']) for a in self.store.alerts_of({e['lifecycle_id'] for e in events})}
+        for ev in events:
+            if all((ev['lifecycle_id'], ev['event_key'], ch) in have for ch in CHANNELS):
+                continue
+            lc = self.store.lifecycle(ev['lifecycle_id'])
+            kind = ALERT_EVENT_KINDS[ev['event_key']]
+            ready = lc and (lc.get('entry_fill_price') is not None if kind == 'COMPRA ORA' else lc.get('exit_price') is not None)
+            if not ready:
+                continue                                  # transizione non ancora completata: al prossimo run
+            subject, text = notifications.build_buy_alert(lc) if kind == 'COMPRA ORA' else notifications.build_sell_alert(lc)
+            for ch in CHANNELS:
+                if (ev['lifecycle_id'], ev['event_key'], ch) in have:
+                    continue
+                row = {'lifecycle_id': ev['lifecycle_id'], 'event_key': ev['event_key'], 'kind': kind, 'channel': ch, 'status': 'PENDING',
+                       'attempts': 0, 'subject': subject, 'message': text, 'event_detected_at': ev['detected_at']}
+                if self.store.insert_alert(row):
+                    self.alert_stats['enqueued'] += 1
+
+    def deliver_alerts(self):
+        """Consegna gli alert PENDING/FAILED ancora utili. Un errore qui NON tocca mai lo stato dei cicli."""
+        for al in self.store.open_alerts():
+            age_min = (self.now - parse_ts(al['event_detected_at'])).total_seconds() / 60
+            if al['kind'] != 'TEST' and age_min > ALERT_MAX_AGE_MINUTES[al['kind']]:
+                self.store.update_alert(al['id'], {'status': 'EXPIRED', 'last_error': f"non piu utile ({int(age_min)} min dall'evento)"})
+                self.alert_stats['expired'] += 1
+                self.log(f"⌛ alert {al['kind']} {al['channel']} scaduto senza invio ({int(age_min)} min)")
+                continue
+            if int(al['attempts'] or 0) >= ALERT_MAX_ATTEMPTS:
+                self.store.update_alert(al['id'], {'status': 'GIVEN_UP'})
+                self.alert_stats['given_up'] += 1
+                continue
+            try:
+                status, err = self.senders[al['channel']](al.get('subject'), al['message'])
+            except Exception as exc:                      # nessun errore di invio deve fermare T
+                status, err = 'FAILED', f"{type(exc).__name__}: {str(exc)[:200]}"
+            fields = {'attempts': int(al['attempts'] or 0) + 1, 'last_error': err}
+            if status == 'SENT':
+                fields.update(status='SENT', sent_at=_iso(self.now))
+                self.alert_stats['sent'] += 1
+            elif status == 'NOT_CONFIGURED':
+                fields.update(status='NOT_CONFIGURED')    # canale non configurato: niente ritentativi inutili
+                self.alert_stats['not_configured'] += 1
+            else:
+                fields.update(status='FAILED')
+                self.alert_stats['failed'] += 1
+                self.notes.append(f"alert {al['kind']} {al['channel']} non consegnato: {err}")
+            self.store.update_alert(al['id'], fields)
+            self.log(f"📣 alert {al['kind']} {al['channel']}: {fields['status']}" + (f" ({err})" if err else ''))
+
     def run(self):
         self.create_lifecycles()
         self.evaluate_all()
         self.retry_pending()
+        if not self.dry_run:
+            try:
+                self.sync_alerts()
+                self.deliver_alerts()
+            except Exception as exc:                      # le notifiche non fanno mai fallire T
+                self.notes.append(f"errore nel livello notifiche: {type(exc).__name__}: {str(exc)[:200]}")
+                self.log(f"⚠️ errore nel livello notifiche: {exc}")
         return self.c
+
+
+def test_alert(sb, now):
+    """Messaggio di PROVA (nessuna azione richiesta) su entrambi i canali; l'esito resta in trade_alerts (kind TEST)."""
+    eng = Engine(sb, now, log=print)
+    subject, text = notifications.build_test_alert(now)
+    key = f"TEST:{now:%Y%m%dT%H%M%S}"
+    for ch in CHANNELS:
+        eng.store.insert_alert({'lifecycle_id': None, 'event_key': key, 'kind': 'TEST', 'channel': ch, 'status': 'PENDING', 'attempts': 0,
+                                'subject': subject, 'message': text, 'event_detected_at': _iso(now)})
+    eng.deliver_alerts()
+    print(f"✅ prova notifiche completata: {eng.alert_stats}")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true', help='calcola e stampa, senza scrivere')
     ap.add_argument('--now', help='istante ISO UTC (solo per riprodurre il passato)')
+    ap.add_argument('--test-alert', action='store_true', help='invia un messaggio di PROVA su Telegram ed email e ne registra l esito')
     args = ap.parse_args()
     if EXECUTOR_MODE != 'NOT_LINKED':
         raise SystemExit('FASE 4: solo executor NOT_LINKED (nessuna operazione di portafoglio)')
     from config import supabase
     now = parse_ts(args.now) if args.now else datetime.now(timezone.utc)
+    if args.test_alert:
+        return test_alert(supabase, now)
     eng = Engine(supabase, now, dry_run=args.dry_run)
     run_id = eng.store.run_start(EXECUTOR_MODE, args.dry_run, now)
     print(f"Modulo T - state machine (paper, nessun messaggio, nessuna operazione di portafoglio) | now={now:%Y-%m-%d %H:%M} UTC")
     try:
         counters = eng.run()
-        eng.store.run_finish(run_id, 'OK', counters, notes={'note': eng.notes[:20]})
-        print(f"✅ T completato: {counters}")
+        eng.store.run_finish(run_id, 'OK', counters, notes={'note': eng.notes[:20], 'alerts': eng.alert_stats})
+        print(f"✅ T completato: {counters} | alert: {eng.alert_stats}")
     except Exception as e:
         eng.store.run_finish(run_id, 'ERROR', eng.c, error=str(e)[:900], notes={'note': eng.notes[:20]})
         print(f"❌ T errore: {e}")
