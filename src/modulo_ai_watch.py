@@ -322,6 +322,8 @@ def call_gemini_watch(metrics):
         return []
 
 
+# Interruttore: False = AI Watch non invia piu' email/Telegram (si riattiva mettendo True; le funzioni restano).
+AI_WATCH_EXTERNAL_ALERTS = False
 ALERT_DELIVERY_FAILED = False
 
 
@@ -467,6 +469,14 @@ def run_ai_watch():
     header = ("📡 SAPTA — Ipotesi qualitativa IA, solo osservazione (NON un segnale operativo, "
                "NON una previsione - i livelli reali esistono solo se indicato 'segnale attivo'):\n\n")
     message = header + "\n\n".join(lines)
+
+    if not AI_WATCH_EXTERNAL_ALERTS:
+        # [05/10] Le notifiche esterne operative arrivano SOLO dal Modulo T (COMPRA ORA / VENDI ORA).
+        # Le ipotesi restano calcolate, salvate in ai_hypotheses e visibili in dashboard.
+        print(f"   AI Watch: {len(new_items)} nuove ipotesi, {len(newly_confirmed)} conferme. "
+              "Nessuna notifica esterna: consultare la dashboard.")
+        print("✅ AI Watch completato")
+        return
 
     tg_ok = send_telegram(message)
     email_ok = send_email("SAPTA - Nuove ipotesi da valutare", message.replace('*', ''))
