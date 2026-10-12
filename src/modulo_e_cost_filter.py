@@ -211,32 +211,59 @@ def calculate_position_size(entry_price, invalidation_price, capital, risk_perce
     return max_risk_eur / stop_distance
 
 
+# [NUOVO 07/10] Esposizione e limite per settore sulle posizioni ATTIVE, non sui segnali storici.
+# Prima si sommavano i BUY approvati negli ultimi 10 giorni: contavano anche segnali scaduti, mai entrati o
+# gia' chiusi (21 BUY su 21 bloccati in una settimana con il portafoglio vuoto). Fonte attuale: i cicli di T.
+# Quando il portafoglio paper sara' collegato (FASE 5) bastera' cambiare QUESTA funzione: una sola fonte autorevole.
+ACTIVE_CYCLE_STATES = ('ENTRY_PENDING', 'ACTIVE', 'EXIT_PENDING')   # capitale impegnato (un WATCH non ha comprato nulla)
+RACE_WINDOW_MINUTES = 30      # BUY approvati da E da meno di 30 min che T non ha ancora trasformato in ciclo
+
+
+def get_active_exposure_items():
+    """Elenco [{'ticker', 'eur', 'source'}] di cio' che impegna capitale ADESSO:
+    1) cicli di T con ingresso deciso e non ancora usciti (controvalore reale del ciclo);
+    2) finestra di corsa: BUY approvati da E negli ultimi 30 minuti senza ancora un ciclo (cosi' piu' segnali approvati
+       nello stesso run si vedono tra loro, come prima) - non contano se il titolo ha gia' un ciclo attivo.
+    Scaduti, invalidati, chiusi e storici non contano."""
+    items = []
+    cyc = (supabase.table('trade_lifecycle').select('ticker,countervalue_eur,state')
+           .in_('state', list(ACTIVE_CYCLE_STATES)).execute().data or [])
+    active_tickers = set()
+    for c in cyc:
+        items.append({'ticker': c['ticker'], 'eur': float(c.get('countervalue_eur') or 0), 'source': 'T'})
+        active_tickers.add(c['ticker'])
+    since = (datetime.now(timezone.utc) - timedelta(minutes=RACE_WINDOW_MINUTES)).isoformat()
+    recent = (supabase.table('signals_filtered').select('raw_signal_id,ticker,position_size_suggested')
+              .eq('filtered_action', 'BUY').eq('filter_passed', True).gte('timestamp', since).execute().data or [])
+    if recent:
+        raw_ids = [r['raw_signal_id'] for r in recent if r.get('raw_signal_id') is not None]
+        with_cycle = set()
+        if raw_ids:
+            with_cycle = {r['raw_signal_id'] for r in (supabase.table('trade_lifecycle').select('raw_signal_id')
+                                                       .in_('raw_signal_id', raw_ids).execute().data or [])}
+        for r in recent:
+            if r.get('raw_signal_id') in with_cycle or r['ticker'] in active_tickers:
+                continue
+            items.append({'ticker': r['ticker'], 'eur': float(r.get('position_size_suggested') or 0), 'source': 'signal'})
+    return items
+
+
 def check_sector_concentration(ticker, sector, lookback_days, max_per_sector):
-    """[v5.1.1] Logica invariata dalla v3.2, ma ora sector arriva da
-    ticker_sectors (128 ticker) invece che da SECTOR_MAP (6 ticker) -
-    il controllo copre finalmente tutto l'universo."""
+    """[v5.1.1] Settore da ticker_sectors (tutto l'universo). [07/10] Si contano le posizioni ATTIVE del settore
+    (vedi get_active_exposure_items), non i BUY approvati degli ultimi giorni. lookback_days non e' piu' usato."""
     if not sector:
         return True, 0  # settore sconosciuto (es. BPSO.MI): fail-open, non blocca
 
     try:
-        threshold = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
-        # Serve la lista di ticker dello stesso settore: query diretta su ticker_sectors
         same_sector = (supabase.table('ticker_sectors')
                        .select('ticker')
                        .eq('sector', sector)
                        .execute())
-        sector_tickers = [r['ticker'] for r in (same_sector.data or [])]
+        sector_tickers = {r['ticker'] for r in (same_sector.data or [])}
         if not sector_tickers:
             return True, 0
-
-        response = (supabase.table('signals_filtered')
-                    .select('ticker')
-                    .in_('ticker', sector_tickers)
-                    .eq('filtered_action', 'BUY')
-                    .eq('filter_passed', True)
-                    .gte('timestamp', threshold)
-                    .execute())
-        count = len(response.data) if response.data else 0
+        held = {i['ticker'] for i in get_active_exposure_items() if i['ticker'] in sector_tickers}
+        count = len(held)
         return count < max_per_sector, count
     except Exception as e:
         print(f"⚠️ Errore controllo concentrazione settore {sector}: {e}")
@@ -244,23 +271,11 @@ def check_sector_concentration(ticker, sector, lookback_days, max_per_sector):
 
 
 def check_portfolio_exposure(new_position_eur, capital, lookback_days, max_exposure_percent):
-    """[Sezione 15 - NUOVO 16/09] Esposizione totale stimata: somma del
-    position_size_suggested (in EUR, gia' calcolato da Sezione 13) di tutte
-    le opportunita' BUY approvate nella finestra di lookback, piu' la nuova
-    candidata, confrontata col capitale corrente. Fail-open come il
-    controllo di concentrazione settoriale: errore -> non blocca il job."""
+    """[Sezione 15] Esposizione totale = capitale impegnato dalle posizioni ATTIVE (vedi get_active_exposure_items)
+    piu' la nuova candidata, rispetto al capitale corrente. [07/10] Non somma piu' i segnali storici; lookback_days non
+    e' piu' usato. Fail-open come il controllo di concentrazione settoriale: errore -> non blocca il job."""
     try:
-        threshold = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
-        response = (supabase.table('signals_filtered')
-                    .select('position_size_suggested')
-                    .eq('filtered_action', 'BUY')
-                    .eq('filter_passed', True)
-                    .gte('timestamp', threshold)
-                    .execute())
-        existing_exposure = sum(
-            float(r['position_size_suggested']) for r in (response.data or [])
-            if r.get('position_size_suggested')
-        )
+        existing_exposure = sum(i['eur'] for i in get_active_exposure_items())
         total_exposure = existing_exposure + (new_position_eur or 0)
         exposure_pct = total_exposure / capital if capital else 1.0
         return exposure_pct <= max_exposure_percent, exposure_pct
