@@ -13,6 +13,7 @@ Scarica prezzi da yfinance + Finnhub, riconcilia, scrive in Supabase.
   dato "stale" (più vecchio di quanto atteso per un ciclo a 15 minuti) e
   volume a zero (possibile halt o dato mancante).
 """
+import os
 import yfinance as yf
 import requests
 import pandas as pd
@@ -44,7 +45,7 @@ STALE_THRESHOLD_MINUTES = 30
 def fetch_yfinance(tickers):
     """Fonte primaria: yfinance (Yahoo Finance)"""
     try:
-        df = yf.download(tickers, period="2d", interval="15m", group_by='ticker', auto_adjust=True, progress=False)
+        df = yf.download(tickers, period=os.getenv("A_PERIOD", "2d"), interval="15m", group_by='ticker', auto_adjust=True, progress=False)
         return df
     except Exception as e:
         print(f"❌ Errore yfinance: {e}")
