@@ -38,6 +38,7 @@ function render_nav($active) {
         'signals.php'   => 'Segnali grezzi',
         'decisions.php' => 'Paper trading',
         'chat.php'      => 'Chat AI',
+        'portafoglio.php' => 'Portafogli',
         'capital.php'   => 'Capitale',
     ];
     echo '<nav class="nav-bar">';
