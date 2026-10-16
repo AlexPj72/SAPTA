@@ -581,6 +581,8 @@ def get_candidates(market_filter='ALL', force_reprocess=False):
         query = supabase.table('screening_candidates').select('*').eq('status', 'promosso_a_B')
         if not force_reprocess:
             query = query.is_('b_processed_at', 'null')
+        else:   # rianalisi di chiusura: solo i candidati delle ultime 24h (prima ~300+ => timeout del workflow)
+            query = query.gte('created_at', (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat())
         response = query.execute()
         rows = response.data or []
     except Exception as e:

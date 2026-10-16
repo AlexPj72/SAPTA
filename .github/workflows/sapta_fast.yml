@@ -6,7 +6,7 @@ on:
     # Nota: copre bene Milano; il mercato USA chiude più tardi (13:30/14:30-20:00/21:00 UTC
     # a seconda dell'ora legale) e resta parzialmente scoperto — estendi l'intervallo
     # (es. "9-20") se vuoi coprire anche la chiusura USA, tenendo conto dell'impatto sui minuti.
-    - cron: '*/15 9-17 * * 1-5'
+    - cron: '*/15 7-21 * * 1-5'
   workflow_dispatch:
 
 concurrency:

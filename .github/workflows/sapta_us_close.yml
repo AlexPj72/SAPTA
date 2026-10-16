@@ -14,7 +14,7 @@ concurrency:
 jobs:
   us-close-signal:
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -32,7 +32,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install --retries 5 --timeout 60 -r requirements-slow.txt
 
+      - name: Update Daily Prices - aggiornamento incrementale 1d (NUOVO 22/09 - fix audit)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/update_daily_prices.py
+
+      - name: Run Modulo EOD Verify - Verifica esiti reali AI Watch (NUOVO 19/09)
+        if: ${{ !cancelled() }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_eod_verify.py
+
+      - name: Run Modulo Experimental Rule - regola sperimentale non operativa (NUOVO 20/09)
+        if: ${{ !cancelled() }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_experimental_rule.py
+
       - name: Run Modulo B - Analysis & Signals (solo USA, barra ormai finalizzata)
+        if: ${{ !cancelled() }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -42,25 +63,8 @@ jobs:
         run: python src/modulo_b_analysis.py --market=USA --force-reprocess
 
       - name: Run Modulo E - Cost Filter (solo USA)
+        if: ${{ !cancelled() }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python src/modulo_e_cost_filter.py --market=USA
-
-      - name: Update Daily Prices - aggiornamento incrementale 1d (NUOVO 22/09 - fix audit)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python src/update_daily_prices.py
-
-      - name: Run Modulo EOD Verify - Verifica esiti reali AI Watch (NUOVO 19/09)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python src/modulo_eod_verify.py
-
-      - name: Run Modulo Experimental Rule - regola sperimentale non operativa (NUOVO 20/09)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python src/modulo_experimental_rule.py

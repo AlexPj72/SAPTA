@@ -2,7 +2,7 @@ name: SAPTA Slow Pipeline (Analysis + Cost Filter)
 
 on:
   schedule:
-    - cron: '0,30 9-17 * * 1-5'  # ogni 30 minuti, 9-17 UTC, Lun-Ven
+    - cron: '0,30 7-21 * * 1-5'  # ogni 30 minuti, 7-21 UTC, Lun-Ven (copre anche la chiusura USA in ora solare)
   workflow_dispatch:
 
 concurrency:

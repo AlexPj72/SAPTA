@@ -41,8 +41,8 @@ EXPIRY_GRACE_MINUTES = 20          # scadenza per tempo: aspetta che arrivino le
 BAR_CLOSED_GRACE_SECONDS = 60      # una candela e' chiusa se la sua fine + 60 s e' passata
 COHERENCE_TOLERANCE = 0.005        # R-INV = 1,5A e TGT-R = 3A, tolleranza 0,5% del prezzo
 RISK_PER_TRADE_PERCENT = 0.01      # stessa formula di Modulo E (1% del capitale / distanza dallo stop)
-PORTFOLIO_CODE = 'PORTAFOGLIO_UTENTE'
-EXECUTOR_MODE = 'NOT_LINKED'       # FASE 4: nessuna operazione di portafoglio
+PORTFOLIO_CODE = 'PORTAFOGLIO_AI'   # FASE 5: il portafoglio virtuale gestito in automatico dall'IA (solo paper)
+EXECUTOR_MODE = 'PORTFOLIO'         # FASE 5: le intenzioni diventano operazioni virtuali sul portafoglio (nessun ordine reale)
 SIGNAL_LOOKBACK_DAYS = 3
 ALERT_MAX_ATTEMPTS = 5
 ALERT_MAX_AGE_MINUTES = {'COMPRA ORA': 30, 'VENDI ORA': 240}   # oltre, l'alert non e' piu' utile: EXPIRED
@@ -160,6 +160,68 @@ class NotLinkedExecutor:
         return ExecResult(True, 'NOT_LINKED')
 
 
+class PortfolioExecutor:
+    """FASE 5: esegue l'intenzione sul portafoglio PAPER con la funzione SQL atomica e idempotente
+    portfolio_execute_trade (mai ordini reali). I cicli NOT_LINKED (nati prima della FASE 5) restano non collegati."""
+    name = 'PORTFOLIO'
+
+    def __init__(self, sb, fx_usd_per_eur=None):
+        self.sb, self.fx_usd_per_eur, self._costs = sb, fx_usd_per_eur, None
+
+    def _fees(self, market, value_eur):
+        if self._costs is None:
+            rows = self.sb.table('costi_operazione').select('*').eq('attivo', True).execute().data or []
+            by = {('Alpaca', 'USA'): 'USA', ('Interactive Brokers', 'EU'): 'EU'}
+            self._costs = {by[(r['broker'], r['mercato'])]: r for r in rows if (r['broker'], r['mercato']) in by}
+        c = self._costs.get(market)
+        if not c:
+            raise RuntimeError(f'costi di operazione mancanti per il mercato {market}')
+        return round(float(c['commissione_fissa']) + value_eur * (float(c['commissione_percentuale']) + float(c['bollo_percentuale'])), 2)
+
+    def _ai_decision_id(self, lc):
+        try:
+            sig = self.sb.table('signals_filtered').select('timestamp').eq('id', lc['signal_filtered_id']).execute().data
+            if not sig:
+                return None
+            r = self.sb.table('ai_agent_decisions').select('id').eq('ticker', lc['ticker']).lte('timestamp', sig[0]['timestamp']) \
+                .order('timestamp', desc=True).limit(1).execute().data
+            return r[0]['id'] if r else None
+        except Exception:
+            return None
+
+    def execute(self, lc, intent):
+        if lc.get('sync_status') == 'NOT_LINKED':
+            return ExecResult(True, 'NOT_LINKED')
+        try:
+            buy = intent['intent_type'] == 'BUY'
+            qty = float(intent['quantity'])
+            slip = float(lc.get('slippage_pct') or 0)
+            if buy:
+                price, fx = float(lc['entry_fill_price']), float(lc['fx_eur_per_local'])
+                ref = price / (1 + slip)
+                at, bar_start, delay = lc['trigger_bar_end'], lc['trigger_bar_start'], lc.get('trigger_delay_minutes')
+            else:
+                price, fx = float(lc['exit_price']), float(lc['fx_eur_per_local'])
+                if lc['currency'] == 'USD' and self.fx_usd_per_eur:
+                    u = self.fx_usd_per_eur()
+                    fx = (1.0 / u) if u else fx
+                ref = price / (1 - slip) if slip < 1 else price
+                at, bar_start, delay = lc['exit_bar_end'], lc['exit_bar_start'], lc.get('exit_delay_minutes')
+            fees = self._fees(lc['market'], qty * price * fx)
+            params = {'p_code': PORTFOLIO_CODE, 'p_ticker': lc['ticker'], 'p_side': intent['intent_type'], 'p_quantity': qty,
+                      'p_price_local': price, 'p_executed_at': at, 'p_idempotency_key': intent['idempotency_key'],
+                      'p_market': lc['market'], 'p_currency': lc['currency'], 'p_fx_eur_per_local': fx, 'p_fees_eur': fees,
+                      'p_price_reference': ref, 'p_slippage_pct': slip, 'p_source_type': 'AI_AGENT', 'p_lifecycle_id': lc['id'],
+                      'p_signal_raw_id': lc['raw_signal_id'], 'p_signal_filtered_id': lc['signal_filtered_id'],
+                      'p_ai_decision_id': self._ai_decision_id(lc), 'p_bar_start': bar_start, 'p_data_delay_minutes': delay}
+            out = self.sb.rpc('portfolio_execute_trade', params).execute().data
+            if isinstance(out, list):
+                out = out[0] if out else {}
+            return ExecResult(True, 'DONE', tx_id=(out or {}).get('tx_id'))
+        except Exception as e:
+            return ExecResult(False, 'FAILED', error=str(e)[:400])
+
+
 def intent_key(lc_id, intent_type):
     # identico a portfolio_idempotency_key(code, lifecycle_id, evento) in SQL: deterministico, mai casuale
     return f"{PORTFOLIO_CODE}:LC{lc_id}:{intent_type}"
@@ -217,7 +279,17 @@ class Store:
     def reserved_eur(self):
         """Capitale 'prenotato' da cicli con ingresso deciso ma non ancora nel portafoglio (FASE 4: tutti i cicli ACTIVE)."""
         rows = self._t('trade_lifecycle').select('countervalue_eur,state,sync_status').in_('state', ['ENTRY_PENDING', 'ACTIVE', 'EXIT_PENDING']).execute().data or []
+        if EXECUTOR_MODE == 'PORTFOLIO':     # con il portafoglio reale la cassa e' gia' scalata: si riservano solo gli ingressi non ancora registrati
+            return sum(float(r['countervalue_eur'] or 0) for r in rows if r['state'] == 'ENTRY_PENDING' and r['sync_status'] in ('PENDING', 'FAILED'))
         return sum(float(r['countervalue_eur'] or 0) for r in rows if r['sync_status'] != 'DONE')
+
+    def invested_eur(self):
+        """Costo delle posizioni aperte del portafoglio (per dimensionare sul capitale totale, non solo sulla cassa libera)."""
+        pf = self._t('portfolios').select('id').eq('code', PORTFOLIO_CODE).execute().data or []
+        if not pf:
+            return 0.0
+        rows = self._t('portfolio_positions').select('cost_basis_eur').eq('portfolio_id', pf[0]['id']).eq('status', 'OPEN').execute().data or []
+        return sum(float(r['cost_basis_eur'] or 0) for r in rows)
 
     def intent(self, lc_id, intent_type):
         r = self._t('trade_intents').select('*').eq('lifecycle_id', lc_id).eq('intent_type', intent_type).execute().data or []
@@ -492,9 +564,9 @@ class Engine:
         fill = bar['c'] * (1 + float(lc['slippage_pct'] or 0))
         cash = self.store.portfolio_cash()
         if cash is None:
-            return self._note(lc, bar, 'ingresso rimandato: portafoglio utente non trovato', retry=True)
+            return self._note(lc, bar, 'ingresso rimandato: portafoglio non trovato', retry=True)
         reserved = self.store.reserved_eur()
-        sizing_capital_eur = cash + reserved if self.executor.name == 'NOT_LINKED' else cash + reserved
+        sizing_capital_eur = (cash + reserved) if self.executor.name == 'NOT_LINKED' else (cash + self.store.invested_eur())
         qty_f = position_size(fill, float(lc['invalidation_price']), sizing_capital_eur / fx_eur_per_local)
         qty = math.floor(qty_f) if qty_f else 0
         if qty < 1:
@@ -680,25 +752,43 @@ def test_alert(sb, now):
     print(f"✅ prova notifiche completata: {eng.alert_stats}")
 
 
+def snapshot_if_due(sb, now, every_minutes=55):
+    """Fotografia del portafoglio (curva del capitale): al piu' una ogni ~ora, mai bloccante."""
+    try:
+        pf = sb.table('portfolios').select('id').eq('code', PORTFOLIO_CODE).execute().data
+        if not pf:
+            return
+        last = sb.table('portfolio_snapshots').select('snapshot_at').eq('portfolio_id', pf[0]['id']).order('snapshot_at', desc=True).limit(1).execute().data
+        if last and parse_ts(last[0]['snapshot_at']) > now - timedelta(minutes=every_minutes):
+            return
+        sb.rpc('portfolio_snapshot', {'p_code': PORTFOLIO_CODE, 'p_snapshot_at': _iso(now)}).execute()
+        print('📸 snapshot portafoglio registrato')
+    except Exception as e:
+        print(f'⚠️ snapshot portafoglio non registrato: {e}')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true', help='calcola e stampa, senza scrivere')
     ap.add_argument('--now', help='istante ISO UTC (solo per riprodurre il passato)')
     ap.add_argument('--test-alert', action='store_true', help='invia un messaggio di PROVA su Telegram ed email e ne registra l esito')
     args = ap.parse_args()
-    if EXECUTOR_MODE != 'NOT_LINKED':
-        raise SystemExit('FASE 4: solo executor NOT_LINKED (nessuna operazione di portafoglio)')
     from config import supabase
     now = parse_ts(args.now) if args.now else datetime.now(timezone.utc)
     if args.test_alert:
         return test_alert(supabase, now)
-    eng = Engine(supabase, now, dry_run=args.dry_run)
+    executor = PortfolioExecutor(supabase) if EXECUTOR_MODE == 'PORTFOLIO' else NotLinkedExecutor()
+    eng = Engine(supabase, now, executor=executor, dry_run=args.dry_run)
+    if isinstance(executor, PortfolioExecutor):
+        executor.fx_usd_per_eur = eng.usd_per_eur
     run_id = eng.store.run_start(EXECUTOR_MODE, args.dry_run, now)
-    print(f"Modulo T - state machine (paper, nessun messaggio, nessuna operazione di portafoglio) | now={now:%Y-%m-%d %H:%M} UTC")
+    print(f"Modulo T - state machine (paper: operazioni virtuali sul portafoglio IA, nessun ordine reale) | now={now:%Y-%m-%d %H:%M} UTC")
     try:
         counters = eng.run()
         eng.store.run_finish(run_id, 'OK', counters, notes={'note': eng.notes[:20], 'alerts': eng.alert_stats})
         print(f"✅ T completato: {counters} | alert: {eng.alert_stats}")
+        if EXECUTOR_MODE == 'PORTFOLIO' and not args.dry_run:
+            snapshot_if_due(supabase, now)
     except Exception as e:
         eng.store.run_finish(run_id, 'ERROR', eng.c, error=str(e)[:900], notes={'note': eng.notes[:20]})
         print(f"❌ T errore: {e}")
