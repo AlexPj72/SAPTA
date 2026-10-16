@@ -98,6 +98,18 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <title>SAPTA — Portafogli</title>
     <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
+    <style>
+        .wrap h2 { margin: 32px 0 12px; line-height: 1.3; }
+        .wrap h3 { margin: 0 0 10px; }
+        .wrap .card { margin: 14px 0; padding: 16px; overflow: hidden; }
+        .wrap .stat-grid { margin: 12px 0; }
+        .wrap .tw { overflow-x: auto; }
+        .wrap table { width: 100%; border-collapse: collapse; }
+        .wrap th, .wrap td { padding: 6px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid #e3e3e3; white-space: nowrap; }
+        .wrap input[name=quantita], .wrap input[name=prezzo] { width: 80px; }
+        .wrap .badge { display: inline-block; margin-left: 8px; padding: 2px 10px; border-radius: 10px; font-size: .6em; vertical-align: middle; background: #e6f4ea; }
+        .wrap button { padding: 6px 12px; cursor: pointer; }
+    </style>
 </head>
 <body>
 <header class="hero compact">
@@ -130,8 +142,8 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     ?>
     <h2>Segnali operativi attivi (COMPRA ORA) <span class="badge"><?= count($sig) ?></span></h2>
     <div class="card">
-    <?php if (!$sig): ?><p class="muted">Nessun segnale operativo attivo in questo momento.</p><?php else: ?>
-        <table><tr><th>Ticker</th><th>Prezzo</th><th>Stop</th><th>Obiettivo</th><th>Uscita entro</th><th>Quantità</th><th>Prezzo reale</th><th></th></tr>
+    <?php if (!$sig): ?><p class="muted">Nessun segnale operativo attivo in questo momento. Il pulsante <b>Ho comprato</b> compare qui quando c'è un COMPRA ORA; <b>Ho venduto</b> compare accanto a ogni posizione aperta del portafoglio dell'utente.</p><?php else: ?>
+        <div class="tw"><table><tr><th>Ticker</th><th>Prezzo</th><th>Stop</th><th>Obiettivo</th><th>Uscita entro</th><th>Quantità</th><th>Prezzo reale</th><th></th></tr>
         <?php foreach ($sig as $g): ?>
             <?php $fid = 'fc' . (int)$g['id']; ?>
             <tr><td><b><?= e($g['ticker']) ?></b>
@@ -145,7 +157,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
             <td><input form="<?= $fid ?>" name="quantita" size="5" value="<?= e(rtrim(rtrim(number_format((float)$g['quantity'], 4, '.', ''), '0'), '.')) ?>"></td>
             <td><input form="<?= $fid ?>" name="prezzo" size="7" value="<?= e(number_format((float)$g['entry_fill_price'], 2, '.', '')) ?>"></td>
             <td><button form="<?= $fid ?>" type="submit">Ho comprato</button></td></tr>
-        <?php endforeach; ?></table>
+        <?php endforeach; ?></table></div>
         <p class="muted">Se hai comprato diversamente dal segnale, correggi quantità e prezzo prima di premere il pulsante.</p>
     <?php endif; ?></div>
     <?php endif; ?>
@@ -168,7 +180,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <div class="card"><h3>Curva del capitale</h3><?= pf_curve($snap, $init) ?></div>
     <div class="card"><h3>Posizioni aperte (<?= count($pos) ?>)</h3>
     <?php if (!$pos): ?><p class="muted">Nessuna posizione aperta.</p><?php else: ?>
-        <table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo del</th><?php if ($code === 'PORTAFOGLIO_UTENTE'): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
+        <div class="tw"><table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo del</th><?php if ($code === 'PORTAFOGLIO_UTENTE'): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
         <?php foreach ($pos as $r): ?>
             <tr><td><?= e($r['ticker']) ?></td><td><?= e(rtrim(rtrim(number_format((float)$r['quantity'], 4, '.', ''), '0'), '.')) ?></td>
             <td><?= fmt_eur($r['cost_basis_eur']) ?></td><td><?= fmt_eur($r['market_value_eur']) ?></td>
@@ -183,17 +195,17 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
                 <input form="<?= $fv ?>" name="prezzo" size="7" value="<?= e(number_format((float)$r['last_price_local'], 2, '.', '')) ?>"></td>
             <td><button form="<?= $fv ?>" type="submit">Ho venduto</button></td>
             <?php endif; ?></tr>
-        <?php endforeach; ?></table>
+        <?php endforeach; ?></table></div>
     <?php endif; ?></div>
     <div class="card"><h3>Ultime operazioni</h3>
     <?php if (!$txs): ?><p class="muted">Nessuna operazione registrata.</p><?php else: ?>
-        <table><tr><th>Data (UTC)</th><th>Operazione</th><th>Ticker</th><th>Quantità</th><th>Prezzo</th><th>Costi</th><th>Risultato</th></tr>
+        <div class="tw"><table><tr><th>Data (UTC)</th><th>Operazione</th><th>Ticker</th><th>Quantità</th><th>Prezzo</th><th>Costi</th><th>Risultato</th></tr>
         <?php foreach ($txs as $t): ?>
             <tr><td><?= e(substr((string)$t['executed_at'], 0, 16)) ?></td><td><?= $t['tx_type'] === 'BUY' ? 'COMPRATO' : 'VENDUTO' ?></td>
             <td><?= e($t['ticker']) ?></td><td><?= e(rtrim(rtrim(number_format((float)$t['quantity'], 4, '.', ''), '0'), '.')) ?></td>
             <td><?= number_format((float)$t['price_local'], 2) ?> <?= $t['currency'] === 'USD' ? '$' : '€' ?></td>
             <td><?= fmt_eur($t['fees_eur']) ?></td><td><?= $t['tx_type'] === 'SELL' ? fmt_eur($t['realized_pnl_eur']) : '—' ?></td></tr>
-        <?php endforeach; ?></table>
+        <?php endforeach; ?></table></div>
     <?php endif; ?></div>
 <?php endforeach; ?>
 </div>
