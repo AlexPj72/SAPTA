@@ -236,6 +236,26 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
         <?php endforeach; ?></table></div>
     <?php endif; ?></div>
 <?php endforeach; ?>
+<?php if ($pw_ok && $logged):
+    $cmp = pf_query('stop_comparison', ['select' => '*', 'order' => 'lifecycle_id.asc']);
+    $tf = 0; $td = 0; foreach ($cmp as $c) { $tf += (float)$c['fixed_net_eur']; $td += (float)$c['dynamic_net_eur']; }
+    $sg = fn($x) => ($x >= 0 ? '+' : '−') . number_format(abs($x), 2, ',', '.') . ' €';
+?>
+    <h2>Confronto stop fisso / stop dinamico <span class="badge">simulazione</span></h2>
+    <div class="card">
+    <?php if (!$cmp): ?><p class="muted">Nessuna operazione da confrontare.</p><?php else: ?>
+        <div class="tw"><table><tr><th>Ticker</th><th>Stop fisso (regole attuali)</th><th>Stop dinamico</th><th>Differenza</th></tr>
+        <?php foreach ($cmp as $c): ?>
+            <tr><td><a href="grafico.php?ticker=<?= urlencode($c['ticker']) ?>"><?= e($c['ticker']) ?></a></td>
+            <td><?= e($c['fixed_reason']) ?> · <?= $sg((float)$c['fixed_net_eur']) ?></td>
+            <td><?= e($c['dynamic_reason']) ?> · <?= $sg((float)$c['dynamic_net_eur']) ?></td>
+            <td><?= $sg((float)$c['dynamic_net_eur'] - (float)$c['fixed_net_eur']) ?></td></tr>
+        <?php endforeach; ?>
+            <tr><td><b>Totale netto</b></td><td><b><?= $sg($tf) ?></b></td><td><b><?= $sg($td) ?></b></td><td><b><?= $sg($td - $tf) ?></b></td></tr>
+        </table></div>
+        <p class="muted">Stesso ingresso, commissioni, slippage e uscita a 5 sedute in entrambi. Le posizioni APERTE sono valutate all'ultimo prezzo. Non modifica le regole né i portafogli.</p>
+    <?php endif; ?></div>
+<?php endif; ?>
 </div>
 <?php if ($pw_ok && $logged): ?>
 <p class="muted" style="text-align:center">Pagina aggiornata alle <?= (new DateTime('now', new DateTimeZone('Europe/Rome')))->format('H:i:s') ?> (ora italiana) · <span id="aggiorna">…</span></p>

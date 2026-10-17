@@ -96,6 +96,19 @@ def testo(rows):
     return lines
 
 
+def salva(sb, rows):
+    """Scrive i risultati in stop_comparison (una riga per ciclo) per la dashboard."""
+    for r in rows:
+        sb.table('stop_comparison').upsert({
+            'lifecycle_id': r['id'], 'ticker': r['ticker'], 'fixed_reason': r['fisso']['motivo'], 'fixed_net_eur': r['fisso']['netto'],
+            'dynamic_reason': r['dinamico']['motivo'], 'dynamic_net_eur': r['dinamico']['netto'],
+            'updated_at': datetime.now(timezone.utc).isoformat()}, on_conflict='lifecycle_id').execute()
+
+
 if __name__ == '__main__':
     from config import supabase
-    print("\n".join(testo(confronto(supabase))))
+    rows = confronto(supabase)
+    print("\n".join(testo(rows)))
+    if '--salva' in sys.argv:
+        salva(supabase, rows)
+        print(f"Salvate {len(rows)} righe in stop_comparison")
