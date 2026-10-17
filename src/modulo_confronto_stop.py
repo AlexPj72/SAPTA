@@ -11,6 +11,7 @@ from datetime import date, datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import modulo_t_state_machine as T
+import notifications
 from market_calendar import last_regular_bar_start, local_date
 
 
@@ -78,6 +79,10 @@ def confronto(sb, now=None):
     return out
 
 
+def eur(x):
+    return ('+' if x >= 0 else '−') + notifications._num(abs(x), 2) + ' €'
+
+
 def testo(rows):
     if not rows:
         return ["— nessuna operazione da confrontare."]
@@ -85,8 +90,8 @@ def testo(rows):
     for r in rows:
         f, d = r['fisso'], r['dinamico']
         tf += f['netto']; td += d['netto']
-        lines.append(f"• {r['ticker']}: fisso {f['motivo']} {f['netto']:+.2f} € · dinamico {d['motivo']} {d['netto']:+.2f} € · differenza {d['netto'] - f['netto']:+.2f} €")
-    lines.append(f"Totale netto: fisso {tf:+.2f} € · dinamico {td:+.2f} € · differenza {td - tf:+.2f} € (a favore del {'dinamico' if td > tf else 'fisso' if tf > td else 'pari'})")
+        lines.append(f"• {r['ticker']}: fisso {f['motivo']} {eur(f['netto'])} · dinamico {d['motivo']} {eur(d['netto'])} · differenza {eur(d['netto'] - f['netto'])}")
+    lines.append(f"Totale netto: fisso {eur(tf)} · dinamico {eur(td)} · differenza {eur(td - tf)} (a favore del {'dinamico' if td > tf else 'fisso' if tf > td else 'pari'})")
     lines.append("Simulazione in PAPER: stesse commissioni, slippage e uscita a 5 sedute; le posizioni APERTE sono valutate all'ultimo prezzo.")
     return lines
 
