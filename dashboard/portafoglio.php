@@ -246,7 +246,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <?php if (!$cmp): ?><p class="muted">Nessuna operazione da confrontare.</p><?php else: ?>
         <div class="tw"><table><tr><th>Ticker</th><th>Stop fisso (regole attuali)</th><th>Stop dinamico</th><th>Differenza</th></tr>
         <?php foreach ($cmp as $c): ?>
-            <tr><td><a href="grafico.php?ticker=<?= urlencode($c['ticker']) ?>"><?= e($c['ticker']) ?></a></td>
+            <tr><td><a href="grafico.php?ticker=<?= urlencode($c['ticker']) ?>"><?= e($c['ticker']) ?></a><?= !empty($c['storico']) ? ' <span class="muted">(storico, prima del portafoglio)</span>' : '' ?></td>
             <td><?= e($c['fixed_reason']) ?> · <?= $sg((float)$c['fixed_net_eur']) ?></td>
             <td><?= e($c['dynamic_reason']) ?> · <?= $sg((float)$c['dynamic_net_eur']) ?></td>
             <td><?= $sg((float)$c['dynamic_net_eur'] - (float)$c['fixed_net_eur']) ?></td></tr>

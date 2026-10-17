@@ -70,7 +70,7 @@ def confronto(sb, now=None):
         entry_end = T.parse_ts(lc['trigger_bar_end'])
         bars = [b for b in store.bars(lc['ticker'], entry_end) if b['start'] >= entry_end and b['end'] <= now]
         sells = store.approved_sells(lc['ticker'], entry_end)
-        row = {'id': lc['id'], 'ticker': lc['ticker']}
+        row = {'id': lc['id'], 'ticker': lc['ticker'], 'storico': lc.get('sync_status') == 'NOT_LINKED'}
         for name, dyn in (('fisso', False), ('dinamico', True)):
             reason, level, bar = replay(lc, bars, sells, dyn)
             net, fill = net_result(lc, level, ex._fees)
@@ -90,7 +90,7 @@ def testo(rows):
     for r in rows:
         f, d = r['fisso'], r['dinamico']
         tf += f['netto']; td += d['netto']
-        lines.append(f"• {r['ticker']}: fisso {f['motivo']} {eur(f['netto'])} · dinamico {d['motivo']} {eur(d['netto'])} · differenza {eur(d['netto'] - f['netto'])}")
+        lines.append(f"• {r['ticker']}{' (storico)' if r.get('storico') else ''}: fisso {f['motivo']} {eur(f['netto'])} · dinamico {d['motivo']} {eur(d['netto'])} · differenza {eur(d['netto'] - f['netto'])}")
     lines.append(f"Totale netto: fisso {eur(tf)} · dinamico {eur(td)} · differenza {eur(td - tf)} (a favore del {'dinamico' if td > tf else 'fisso' if tf > td else 'pari'})")
     lines.append("Simulazione in PAPER: stesse commissioni, slippage e uscita a 5 sedute; le posizioni APERTE sono valutate all'ultimo prezzo.")
     return lines
@@ -101,7 +101,7 @@ def salva(sb, rows):
     for r in rows:
         sb.table('stop_comparison').upsert({
             'lifecycle_id': r['id'], 'ticker': r['ticker'], 'fixed_reason': r['fisso']['motivo'], 'fixed_net_eur': r['fisso']['netto'],
-            'dynamic_reason': r['dinamico']['motivo'], 'dynamic_net_eur': r['dinamico']['netto'],
+            'storico': bool(r.get('storico')), 'dynamic_reason': r['dinamico']['motivo'], 'dynamic_net_eur': r['dinamico']['netto'],
             'updated_at': datetime.now(timezone.utc).isoformat()}, on_conflict='lifecycle_id').execute()
 
 
