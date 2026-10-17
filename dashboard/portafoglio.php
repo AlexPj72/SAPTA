@@ -82,7 +82,7 @@ function pf_fees($market, $value_eur) {
 }
 function pf_num($v) { return (float) str_replace(',', '.', trim((string)$v)); }
 
-$msg = ''; $msg_err = false; $logged = !empty($_SESSION['pf_ok']);
+$mk = []; $msg = ''; $msg_err = false; $logged = !empty($_SESSION['pf_ok']);
 if ($pw_ok && !$logged && isset($_POST['password'])) {
     if (hash_equals(PORTAFOGLIO_PASSWORD, (string)$_POST['password'])) { $_SESSION['pf_ok'] = true; $_SESSION['csrf'] = bin2hex(random_bytes(16)); header('Location: portafoglio.php'); exit; }
     $msg = 'Password errata'; $msg_err = true;
@@ -172,7 +172,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <div class="card">
     <?php if (!$sig): ?><p class="muted">Nessun segnale operativo attivo in questo momento. Il pulsante <b>Ho comprato</b> compare qui quando c'è un COMPRA ORA; <b>Ho venduto</b> compare accanto a ogni posizione aperta del portafoglio dell'utente.</p><?php else: ?>
         <div class="tw"><table><tr><th>Ticker</th><th>Prezzo</th><th>Stop</th><th>Obiettivo</th><th>Uscita entro</th><th>Quantità</th><th>Prezzo reale</th><th></th></tr>
-        <?php foreach ($sig as $g): ?>
+        <?php foreach ($sig as $g): $mk[$g['market']] = true; ?>
             <?php $fid = 'fc' . (int)$g['id']; ?>
             <tr><td><a href="grafico.php?ticker=<?= urlencode($g['ticker']) ?>"><b><?= e($g['ticker']) ?></b></a>
                 <form id="<?= $fid ?>" method="post"></form>
@@ -209,7 +209,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <div class="card"><h3>Posizioni aperte (<?= count($pos) ?>)</h3>
     <?php if (!$pos): ?><p class="muted">Nessuna posizione aperta.</p><?php else: ?>
         <div class="tw"><table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo del</th><?php if ($code === 'PORTAFOGLIO_UTENTE'): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
-        <?php foreach ($pos as $r): ?>
+        <?php foreach ($pos as $r): $mk[$r['market']] = true; ?>
             <tr><td><a href="grafico.php?ticker=<?= urlencode($r['ticker']) ?>"><b><?= e($r['ticker']) ?></b></a></td><td><?= e(rtrim(rtrim(number_format((float)$r['quantity'], 4, '.', ''), '0'), '.')) ?></td>
             <td><?= fmt_eur($r['cost_basis_eur']) ?></td><td><?= fmt_eur($r['market_value_eur']) ?></td>
             <td><?= $r['unrealized_pnl_pct'] === null ? 'n.d.' : number_format((float)$r['unrealized_pnl_pct'], 2) . '%' ?></td>
@@ -238,13 +238,26 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
 <?php endforeach; ?>
 </div>
 <?php if ($pw_ok && $logged): ?>
-<p class="muted" style="text-align:center">Pagina aggiornata alle <?= (new DateTime('now', new DateTimeZone('Europe/Rome')))->format('H:i:s') ?> (ora italiana) · si ricarica da sola ogni 5 minuti</p>
+<p class="muted" style="text-align:center">Pagina aggiornata alle <?= (new DateTime('now', new DateTimeZone('Europe/Rome')))->format('H:i:s') ?> (ora italiana) · <span id="aggiorna">…</span></p>
 <script>
-// Ricarica automatica (GET, mai un nuovo invio di moduli); salta se stai scrivendo in un campo di quantita' o prezzo
+// Ricarica automatica ogni 5 minuti SOLO se e' aperta la borsa di almeno uno dei titoli mostrati (EU 9:00-17:30 ora di Milano,
+// USA 9:30-16:00 ora di New York, con 10 minuti di margine per l'ultima candela; sabato e domenica chiuso; le festivita' non sono considerate).
+var MERCATI = <?= json_encode(array_keys($mk) ?: ['EU', 'USA']) ?>;
+function borsaAperta(m) {
+    var tz = (m === 'EU') ? 'Europe/Rome' : 'America/New_York', g = {};
+    new Intl.DateTimeFormat('en-GB', {timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false})
+        .formatToParts(new Date()).forEach(function (x) { g[x.type] = x.value; });
+    if (g.weekday === 'Sat' || g.weekday === 'Sun') return false;
+    var min = (parseInt(g.hour, 10) % 24) * 60 + parseInt(g.minute, 10);
+    return (m === 'EU') ? (min >= 540 && min < 1050 + 10) : (min >= 570 && min < 960 + 10);
+}
+function almenoUnaAperta() { return MERCATI.some(borsaAperta); }
+document.getElementById('aggiorna').textContent = almenoUnaAperta()
+    ? 'borsa aperta: si ricarica da sola ogni 5 minuti' : 'borse chiuse: nessun aggiornamento automatico';
 setInterval(function () {
     var a = document.activeElement;
-    if (a && (a.name === 'quantita' || a.name === 'prezzo')) return;
-    location.href = location.pathname;
+    if (a && (a.name === 'quantita' || a.name === 'prezzo')) return;   // non perdere quanto stai scrivendo
+    if (almenoUnaAperta()) location.href = location.pathname;           // GET, mai un nuovo invio di moduli
 }, 300000);
 </script>
 <?php endif; ?>
