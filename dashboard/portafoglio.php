@@ -23,18 +23,46 @@ function pf_query($table, $params = []) {
     }
     return $r;
 }
-function pf_curve($rows, $init) {   // curva su base 100, SVG
+function pf_curve($rows, $init) {   // curva su base 100 con assi, griglia e valori al passaggio del mouse
     if (count($rows) < 2) return '<p class="muted">Curva disponibile dopo almeno due rilevazioni orarie.</p>';
-    $v = array_map(fn($r) => (float)$r['equity_eur'] / $init * 100, $rows);
-    $min = min(min($v), 99); $max = max(max($v), 101);
-    $w = 640; $h = 140; $pts = [];
-    foreach ($v as $i => $y) $pts[] = round($i / (count($v) - 1) * $w, 1) . ',' . round($h - ($y - $min) / max($max - $min, 0.01) * $h, 1);
-    $base = round($h - (100 - $min) / max($max - $min, 0.01) * $h, 1);
-    return '<svg viewBox="0 0 ' . $w . ' ' . $h . '" style="width:100%;height:auto"><line x1="0" x2="' . $w . '" y1="' . $base . '" y2="' . $base .
-        '" stroke="#999" stroke-dasharray="4"/><polyline fill="none" stroke="#2a7" stroke-width="2" points="' . implode(' ', $pts) . '"/></svg>' .
-        '<div class="muted">Ultimo valore: ' . number_format(end($v), 2) . ' (base 100)</div>';
+    $tz = new DateTimeZone('Europe/Rome');
+    $v = []; $lab = [];
+    foreach ($rows as $r) {
+        $v[] = (float)$r['equity_eur'] / $init * 100;
+        $lab[] = (new DateTime($r['snapshot_at']))->setTimezone($tz)->format('d/m H:i');
+    }
+    $n = count($v);
+    $min = min(min($v), 99.5); $max = max(max($v), 100.5);
+    $pad = ($max - $min) * 0.1; $min -= $pad; $max += $pad;
+    $W = 720; $H = 260; $L = 56; $R = 14; $T = 14; $B = 40;
+    $pw = $W - $L - $R; $ph = $H - $T - $B; $span = max($max - $min, 0.0001);
+    $X = fn($i) => round($L + $i / ($n - 1) * $pw, 1);
+    $Y = fn($val) => round($T + ($max - $val) / $span * $ph, 1);
+    $svg = '<svg viewBox="0 0 ' . $W . ' ' . $H . '" style="width:100%;height:auto;max-width:760px;color:inherit" font-size="11">';
+    for ($k = 0; $k <= 4; $k++) {            // griglia e valori sull'asse y
+        $val = $min + $span * $k / 4; $y = $Y($val);
+        $svg .= '<line x1="' . $L . '" x2="' . ($W - $R) . '" y1="' . $y . '" y2="' . $y . '" stroke="currentColor" stroke-opacity=".15"/>'
+              . '<text x="' . ($L - 6) . '" y="' . ($y + 4) . '" text-anchor="end" fill="currentColor" fill-opacity=".7">' . number_format($val, 2) . '</text>';
+    }
+    $y100 = $Y(100);                          // linea del capitale iniziale (base 100)
+    $svg .= '<line x1="' . $L . '" x2="' . ($W - $R) . '" y1="' . $y100 . '" y2="' . $y100 . '" stroke="#c80" stroke-dasharray="5 4"/>'
+          . '<text x="' . ($W - $R) . '" y="' . ($y100 - 4) . '" text-anchor="end" fill="#c80">capitale iniziale = 100</text>';
+    $ticks = min(5, $n);                      // date sull'asse x
+    for ($k = 0; $k < $ticks; $k++) {
+        $i = (int) round($k * ($n - 1) / max($ticks - 1, 1)); $x = $X($i);
+        $svg .= '<line x1="' . $x . '" x2="' . $x . '" y1="' . ($T + $ph) . '" y2="' . ($T + $ph + 4) . '" stroke="currentColor" stroke-opacity=".5"/>'
+              . '<text x="' . $x . '" y="' . ($T + $ph + 18) . '" text-anchor="' . ($k === 0 ? 'start' : ($k === $ticks - 1 ? 'end' : 'middle')) . '" fill="currentColor" fill-opacity=".7">' . $lab[$i] . '</text>';
+    }
+    $pts = [];
+    foreach ($v as $i => $val) $pts[] = $X($i) . ',' . $Y($val);
+    $svg .= '<polyline fill="none" stroke="#2a7" stroke-width="2" points="' . implode(' ', $pts) . '"/>';
+    foreach ($v as $i => $val) {              // punti con valore e data (tooltip)
+        if ($n > 80 && $i % ceil($n / 80) !== 0 && $i !== $n - 1) continue;
+        $svg .= '<circle cx="' . $X($i) . '" cy="' . $Y($val) . '" r="3.5" fill="#2a7"><title>' . $lab[$i] . ' — ' . number_format($val, 2) . ' (' . number_format($val * $init / 100, 2) . ' €)</title></circle>';
+    }
+    $svg .= '</svg>';
+    return $svg . '<div class="muted">Ultimo valore: ' . number_format(end($v), 2) . ' (base 100) · ' . $lab[$n - 1] . ' ora italiana</div>';
 }
-
 function pf_rpc($fn, $args) {
     $ch = curl_init(SUPABASE_URL . '/rest/v1/rpc/' . $fn);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_POST => true,
@@ -146,7 +174,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
         <div class="tw"><table><tr><th>Ticker</th><th>Prezzo</th><th>Stop</th><th>Obiettivo</th><th>Uscita entro</th><th>Quantità</th><th>Prezzo reale</th><th></th></tr>
         <?php foreach ($sig as $g): ?>
             <?php $fid = 'fc' . (int)$g['id']; ?>
-            <tr><td><b><?= e($g['ticker']) ?></b>
+            <tr><td><a href="grafico.php?ticker=<?= urlencode($g['ticker']) ?>"><b><?= e($g['ticker']) ?></b></a>
                 <form id="<?= $fid ?>" method="post"></form>
                 <input form="<?= $fid ?>" type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>"><input form="<?= $fid ?>" type="hidden" name="azione" value="compra">
                 <input form="<?= $fid ?>" type="hidden" name="ticker" value="<?= e($g['ticker']) ?>"><input form="<?= $fid ?>" type="hidden" name="mercato" value="<?= e($g['market']) ?>">
@@ -182,7 +210,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <?php if (!$pos): ?><p class="muted">Nessuna posizione aperta.</p><?php else: ?>
         <div class="tw"><table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo del</th><?php if ($code === 'PORTAFOGLIO_UTENTE'): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
         <?php foreach ($pos as $r): ?>
-            <tr><td><?= e($r['ticker']) ?></td><td><?= e(rtrim(rtrim(number_format((float)$r['quantity'], 4, '.', ''), '0'), '.')) ?></td>
+            <tr><td><a href="grafico.php?ticker=<?= urlencode($r['ticker']) ?>"><b><?= e($r['ticker']) ?></b></a></td><td><?= e(rtrim(rtrim(number_format((float)$r['quantity'], 4, '.', ''), '0'), '.')) ?></td>
             <td><?= fmt_eur($r['cost_basis_eur']) ?></td><td><?= fmt_eur($r['market_value_eur']) ?></td>
             <td><?= $r['unrealized_pnl_pct'] === null ? 'n.d.' : number_format((float)$r['unrealized_pnl_pct'], 2) . '%' ?></td>
             <td><?= e(substr((string)$r['price_as_of'], 0, 16)) ?></td>
@@ -202,7 +230,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
         <div class="tw"><table><tr><th>Data (UTC)</th><th>Operazione</th><th>Ticker</th><th>Quantità</th><th>Prezzo</th><th>Costi</th><th>Risultato</th></tr>
         <?php foreach ($txs as $t): ?>
             <tr><td><?= e(substr((string)$t['executed_at'], 0, 16)) ?></td><td><?= $t['tx_type'] === 'BUY' ? 'COMPRATO' : 'VENDUTO' ?></td>
-            <td><?= e($t['ticker']) ?></td><td><?= e(rtrim(rtrim(number_format((float)$t['quantity'], 4, '.', ''), '0'), '.')) ?></td>
+            <td><a href="grafico.php?ticker=<?= urlencode($t['ticker']) ?>"><?= e($t['ticker']) ?></a></td><td><?= e(rtrim(rtrim(number_format((float)$t['quantity'], 4, '.', ''), '0'), '.')) ?></td>
             <td><?= number_format((float)$t['price_local'], 2) ?> <?= $t['currency'] === 'USD' ? '$' : '€' ?></td>
             <td><?= fmt_eur($t['fees_eur']) ?></td><td><?= $t['tx_type'] === 'SELL' ? fmt_eur($t['realized_pnl_eur']) : '—' ?></td></tr>
         <?php endforeach; ?></table></div>
