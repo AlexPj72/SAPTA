@@ -8,6 +8,9 @@ on:
       days:
         description: 'Giorni da riassumere'
         default: '7'
+      solo_stampa:
+        description: 'true = solo nel log, senza inviare Telegram/email'
+        default: 'false'
 
 jobs:
   report:
@@ -32,4 +35,4 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
-        run: python src/modulo_report_ia.py --days "${{ github.event.inputs.days || '7' }}"
+        run: python src/modulo_report_ia.py --days "${{ github.event.inputs.days || '7' }}" ${{ github.event.inputs.solo_stampa == 'true' && '--print-only' || '' }}

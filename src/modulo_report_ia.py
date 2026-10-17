@@ -46,6 +46,11 @@ def build_report(sb, days):
         pct = p.get('unrealized_pnl_pct')
         lines.append(f"• {p['ticker']} × {_num(p['quantity'], 0)} · costo {_num(p['cost_basis_eur'], 2)} € · "
                      f"{'n.d.' if pct is None else _num(pct, 2) + '%'}")
+    try:    # confronto parallelo stop fisso / stop dinamico: mai bloccante per il report
+        import modulo_confronto_stop as conf
+        lines += ["", "Confronto parallelo (PAPER): stop fisso (regole attuali) contro stop dinamico:"] + conf.testo(conf.confronto(sb, now))
+    except Exception as e:
+        lines += ["", f"Confronto stop non disponibile: {str(e)[:120]}"]
     lines += ["", "Simulazione: nessun ordine reale."]
     return f"SAPTA — report portafoglio IA ({now.astimezone(notifications.ROME):%d/%m})", "\n".join(lines)
 
