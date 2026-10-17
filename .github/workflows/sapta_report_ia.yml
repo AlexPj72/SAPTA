@@ -35,4 +35,6 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
-        run: python src/modulo_report_ia.py --days "${{ github.event.inputs.days || '7' }}" ${{ github.event.inputs.solo_stampa == 'true' && '--print-only' || '' }}
+        run: |
+          python src/modulo_report_ia.py --days "${{ github.event.inputs.days || '7' }}" ${{ github.event.inputs.solo_stampa == 'true' && '--print-only' || '' }} | tee report.txt
+          { printf '::notice title=report::'; sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g' report.txt; echo; }
