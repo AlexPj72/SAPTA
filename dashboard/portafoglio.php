@@ -237,5 +237,16 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <?php endif; ?></div>
 <?php endforeach; ?>
 </div>
+<?php if ($pw_ok && $logged): ?>
+<p class="muted" style="text-align:center">Pagina aggiornata alle <?= (new DateTime('now', new DateTimeZone('Europe/Rome')))->format('H:i:s') ?> (ora italiana) · si ricarica da sola ogni 5 minuti</p>
+<script>
+// Ricarica automatica (GET, mai un nuovo invio di moduli); salta se stai scrivendo in un campo di quantita' o prezzo
+setInterval(function () {
+    var a = document.activeElement;
+    if (a && (a.name === 'quantita' || a.name === 'prezzo')) return;
+    location.href = location.pathname;
+}, 300000);
+</script>
+<?php endif; ?>
 </body>
 </html>
