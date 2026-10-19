@@ -28,11 +28,20 @@ Cambiamenti rispetto a v3.2:
   validare con backtest walk-forward prima di dare peso operativo al
   ranking, non solo ordinale/informativo.
 """
+import re
 import argparse
 import json
 import os
 from datetime import datetime, timedelta, timezone
 from config import supabase
+
+
+def _fromiso(s):
+    """fromisoformat tollerante: Python <3.11 accetta solo 3 o 6 cifre di frazione."""
+    s = str(s).replace('Z', '+00:00')
+    s = re.sub(r'\.(\d{1,6})\d*', lambda m: '.' + m.group(1).ljust(6, '0'), s, count=1)
+    return datetime.fromisoformat(s)
+
 
 # [v5.1.1] Sostituisce SECTOR_MAP hardcoded - non più importato da config.py
 MAX_POSITIONS_PER_SECTOR = 2
@@ -332,7 +341,7 @@ def _norm_ts(value):
     """Timestamp ISO -> datetime UTC confrontabile (i formati di Supabase
     possono differire per separatore/offset ma indicano lo stesso istante)."""
     try:
-        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).astimezone(timezone.utc)
+        return _fromiso(value).astimezone(timezone.utc)
     except Exception:
         return None
 

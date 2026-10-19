@@ -20,6 +20,7 @@ FAILED e si ritenta (max 5 volte) finche' e' ancora utile (COMPRA ORA 30 min, VE
 Idempotenza: ogni transizione ha una event_key deterministica (UNIQUE per ciclo); un ciclo per segnale grezzo;
 un solo ciclo aperto per titolo. Rilanciare T, o ripetere un run interrotto a meta', non duplica mai nulla.
 """
+import re
 import argparse
 import json
 import math
@@ -30,7 +31,16 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notifications
 from market_calendar import (BAR_MINUTES, CalendarNotVerified, currency_of, is_regular_bar, last_regular_bar_start,
+
                              local_date, market_of, next_session_close, nth_session_date)
+
+
+def _fromiso(s):
+    """fromisoformat tollerante: Python <3.11 accetta solo 3 o 6 cifre di frazione."""
+    s = str(s).replace('Z', '+00:00')
+    s = re.sub(r'\.(\d{1,6})\d*', lambda m: '.' + m.group(1).ljust(6, '0'), s, count=1)
+    return datetime.fromisoformat(s)
+
 
 # ---------------------------------------------------------------- parametri (specifica v0.3)
 ZONE_ATR_FRACTION = 0.5            # zona di ingresso: da R a R + 0,5*ATR
@@ -64,7 +74,7 @@ def parse_ts(value):
         return None
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    return datetime.fromisoformat(str(value).replace('Z', '+00:00')).astimezone(timezone.utc)
+    return _fromiso(value).astimezone(timezone.utc)
 
 
 # ---------------------------------------------------------------- funzioni pure

@@ -1,5 +1,6 @@
 """Report del portafoglio virtuale dell'IA (PAPER): equity su base 100, operazioni, posizioni aperte.
 Invio su Telegram ed email con le stesse funzioni degli alert. Nessun ordine reale."""
+import re
 import argparse
 import os
 import sys
@@ -9,11 +10,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notifications
 from notifications import _num
 
+
+def _fromiso(s):
+    """fromisoformat tollerante: Python <3.11 accetta solo 3 o 6 cifre di frazione."""
+    s = str(s).replace('Z', '+00:00')
+    s = re.sub(r'\.(\d{1,6})\d*', lambda m: '.' + m.group(1).ljust(6, '0'), s, count=1)
+    return datetime.fromisoformat(s)
+
+
 CODE = 'PORTAFOGLIO_AI'
 
 
 def _d(ts):
-    return datetime.fromisoformat(str(ts).replace('Z', '+00:00')).astimezone(notifications.ROME).strftime('%d/%m %H:%M')
+    return _fromiso(ts).astimezone(notifications.ROME).strftime('%d/%m %H:%M')
 
 
 def build_report(sb, days):

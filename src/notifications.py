@@ -5,6 +5,7 @@ Questo modulo NON legge ne' scrive il database e non decide nulla: costruisce i 
 La gestione di duplicati, ritentativi e scadenza degli alert e' nel Modulo T (tabella trade_alerts).
 Le credenziali si leggono al momento dell'invio (non all'import).
 """
+import re
 import os
 import smtplib
 from datetime import date, datetime, timezone
@@ -12,6 +13,14 @@ from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
 
 import requests
+
+
+def _fromiso(s):
+    """fromisoformat tollerante: Python <3.11 accetta solo 3 o 6 cifre di frazione."""
+    s = str(s).replace('Z', '+00:00')
+    s = re.sub(r'\.(\d{1,6})\d*', lambda m: '.' + m.group(1).ljust(6, '0'), s, count=1)
+    return datetime.fromisoformat(s)
+
 
 ROME = ZoneInfo('Europe/Rome')
 DEFAULT_DASHBOARD_BASE_URL = "https://www.pujia.it/sapta"        # stesso valore usato dagli alert di AI Watch
@@ -70,7 +79,7 @@ def _hhmm(ts):
     if ts is None:
         return '?'
     if not isinstance(ts, datetime):
-        ts = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+        ts = _fromiso(ts)
     return ts.astimezone(ROME).strftime('%H:%M')
 
 
