@@ -1,0 +1,31 @@
+name: Rimbalzo DRY-RUN (manuale, sola lettura)
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Prima data evento (YYYY-MM-DD); vuoto = 2026-10-20'
+        required: false
+        default: ''
+
+jobs:
+  rimbalzo-dryrun:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install --retries 5 --timeout 60 supabase==2.31.0
+      - name: Modulo Rimbalzo --dry-run (non scrive su Supabase)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -n "${{ github.event.inputs.since }}" ]; then
+            python src/modulo_rimbalzo.py --dry-run --since="${{ github.event.inputs.since }}"
+          else
+            python src/modulo_rimbalzo.py --dry-run
+          fi
