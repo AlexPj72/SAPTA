@@ -68,3 +68,11 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python src/modulo_e_cost_filter.py --market=USA
+
+      - name: Run Modulo Rimbalzo - paper USA / osservazione EU (NUOVO 20/10, non bloccante)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_rimbalzo.py
