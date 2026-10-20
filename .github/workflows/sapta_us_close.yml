@@ -76,3 +76,11 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python src/modulo_rimbalzo.py
+
+      - name: Aggiorna storico esiti segnali - solo osservazione (NUOVO 20/10, non bloccante)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/aggiorna_signal_outcomes.py
