@@ -8,12 +8,12 @@ Ingresso simulato: apertura della seduta successiva. Uscita simulata: chiusura d
 dopo il giorno dell'evento), senza stop ne' target. Stesso titolo: minimo 7 giorni tra eventi.
 Controllo: rendimento medio, nella stessa finestra, degli altri titoli dello stesso mercato.
 USA = mode PAPER (operativo in paper), Europa (.MI) = mode OBSERVE (sola registrazione).
-Solo eventi dal FORWARD_START in poi (fuori campione rispetto all'analisi del 20/10/2026)."""
+Solo eventi dal FORWARD_START (12/10/2026) in poi: prima data con finestra a 5 sedute non ancora completa nell'analisi del 20/10/2026, quindi fuori campione."""
 import argparse
 import sys
 from datetime import date, datetime, timedelta, timezone
 
-FORWARD_START = date(2026, 10, 20)
+FORWARD_START = date(2026, 10, 12)
 DROP_THRESHOLD = -0.15
 LOOKBACK = 5
 HOLD_SESSIONS = 5

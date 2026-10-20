@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       since:
-        description: 'Prima data evento (YYYY-MM-DD); vuoto = 2026-10-20'
+        description: 'Prima data evento (YYYY-MM-DD); vuoto = 2026-10-12'
         required: false
         default: ''
 
