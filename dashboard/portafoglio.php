@@ -34,7 +34,7 @@ function pf_curve($rows, $init) {   // curva su base 100 con assi, griglia e val
     $n = count($v);
     $min = min(min($v), 99.5); $max = max(max($v), 100.5);
     $pad = ($max - $min) * 0.1; $min -= $pad; $max += $pad;
-    $W = 720; $H = 260; $L = 56; $R = 14; $T = 14; $B = 40;
+    $W = 720; $H = 260; $L = 56; $R = 68; $T = 14; $B = 40;
     $pw = $W - $L - $R; $ph = $H - $T - $B; $span = max($max - $min, 0.0001);
     $X = fn($i) => round($L + $i / ($n - 1) * $pw, 1);
     $Y = fn($val) => round($T + ($max - $val) / $span * $ph, 1);
@@ -42,11 +42,12 @@ function pf_curve($rows, $init) {   // curva su base 100 con assi, griglia e val
     for ($k = 0; $k <= 4; $k++) {            // griglia e valori sull'asse y
         $val = $min + $span * $k / 4; $y = $Y($val);
         $svg .= '<line x1="' . $L . '" x2="' . ($W - $R) . '" y1="' . $y . '" y2="' . $y . '" stroke="currentColor" stroke-opacity=".15"/>'
-              . '<text x="' . ($L - 6) . '" y="' . ($y + 4) . '" text-anchor="end" fill="currentColor" fill-opacity=".7">' . number_format($val, 2) . '</text>';
+              . '<text x="' . ($L - 6) . '" y="' . ($y + 4) . '" text-anchor="end" fill="currentColor" fill-opacity=".7">' . number_format($val, 2) . '</text>'
+              . '<text x="' . ($W - $R + 6) . '" y="' . ($y + 4) . '" text-anchor="start" fill="currentColor" fill-opacity=".7">' . number_format($val * $init / 100, 0, ',', '.') . ' €</text>';
     }
     $y100 = $Y(100);                          // linea del capitale iniziale (base 100)
     $svg .= '<line x1="' . $L . '" x2="' . ($W - $R) . '" y1="' . $y100 . '" y2="' . $y100 . '" stroke="#c80" stroke-dasharray="5 4"/>'
-          . '<text x="' . ($W - $R) . '" y="' . ($y100 - 4) . '" text-anchor="end" fill="#c80">capitale iniziale = 100</text>';
+          . '<text x="' . ($W - $R - 4) . '" y="' . ($y100 - 4) . '" text-anchor="end" fill="#c80">capitale iniziale = 100</text>';
     $ticks = min(5, $n);                      // date sull'asse x
     for ($k = 0; $k < $ticks; $k++) {
         $i = (int) round($k * ($n - 1) / max($ticks - 1, 1)); $x = $X($i);
@@ -61,7 +62,7 @@ function pf_curve($rows, $init) {   // curva su base 100 con assi, griglia e val
         $svg .= '<circle cx="' . $X($i) . '" cy="' . $Y($val) . '" r="3.5" fill="#2a7"><title>' . $lab[$i] . ' — ' . number_format($val, 2) . ' (' . number_format($val * $init / 100, 2) . ' €)</title></circle>';
     }
     $svg .= '</svg>';
-    return $svg . '<div class="muted">Ultimo valore: ' . number_format(end($v), 2) . ' (base 100) · ' . $lab[$n - 1] . ' ora italiana</div>';
+    return $svg . '<div class="muted">Ultimo valore: ' . number_format(end($v), 2) . ' (base 100) = ' . number_format(end($v) * $init / 100, 2, ',', '.') . ' € · ' . $lab[$n - 1] . ' ora italiana</div>';
 }
 function pf_rpc($fn, $args) {
     $ch = curl_init(SUPABASE_URL . '/rest/v1/rpc/' . $fn);
