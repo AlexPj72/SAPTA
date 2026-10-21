@@ -24,7 +24,7 @@ function sparseTicks(labels) {
     return { callback: (val, idx) => (idx % step === 0 ? labels[idx] : '') };
 }
 
-function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel, target, invalidation, unit) {
+function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel, target, invalidation, unit, pos) {
     if (typeof Chart === 'undefined') return;
     unit = unit || 'eur'; // 'eur' (default, retrocompatibile) oppure 'pct'
     const tickFn = unit === 'pct' ? pctTick : eurTick;
@@ -46,6 +46,22 @@ function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel,
         pointHoverBackgroundColor: lineColor,
         borderWidth: 2.5,
     }];
+    // Posizione in portafoglio: punti oltre target / sotto stop evidenziati
+    if (pos) {
+        const col = [], rad = [];
+        values.forEach(v => {
+            const up = target !== null && v >= target, dn = invalidation !== null && v <= invalidation;
+            col.push(up ? '#16a34a' : (dn ? '#dc2626' : lineColor));
+            rad.push(up || dn ? 5 : 0);
+        });
+        datasets[0].pointBackgroundColor = col;
+        datasets[0].pointBorderColor = col;
+        datasets[0].pointRadius = rad;
+        datasets.push({
+            label: 'Acquisto', data: labels.map(() => pos.entry),
+            borderColor: '#2563eb', borderDash: [2, 3], borderWidth: 1.5, pointRadius: 0, fill: false,
+        });
+    }
 
     if (target !== null) {
         datasets.push({
@@ -55,7 +71,7 @@ function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel,
     }
     if (invalidation !== null) {
         datasets.push({
-            label: 'Invalidazione', data: labels.map(() => invalidation),
+            label: pos ? 'Stop inferiore' : 'Invalidazione', data: labels.map(() => invalidation),
             borderColor: '#dc2626', borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, fill: false,
         });
     }
@@ -72,7 +88,18 @@ function buildChart(canvasId, labels, values, lineColor, fillColor, seriesLabel,
                 tooltip: {
                     backgroundColor: '#1c2333', padding: 10, titleFont: { weight: '700' },
                     callbacks: {
-                        label: (ctx) => ctx.dataset.label + ': ' + fmtValue(ctx.parsed.y)
+                        label: (ctx) => ctx.dataset.label + ': ' + fmtValue(ctx.parsed.y),
+                        afterBody: (items) => {
+                            if (!pos || !items.length) return [];
+                            const v = items[0].parsed.y;
+                            const eur = (v - pos.entry) * pos.qty * pos.fx;
+                            const pct = (v / pos.entry - 1) * 100;
+                            const f = (x, d) => x.toLocaleString('it-IT', {minimumFractionDigits: d, maximumFractionDigits: d, signDisplay: 'always'});
+                            const out = ['Rispetto all\'acquisto: ' + f(eur, 2) + ' € (' + f(pct, 2) + '%)'];
+                            if (target !== null && v >= target) out.push('▲ Oltre il target atteso');
+                            if (invalidation !== null && v <= invalidation) out.push('▼ Sotto lo stop');
+                            return out;
+                        }
                     }
                 }
             },

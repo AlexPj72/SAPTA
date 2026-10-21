@@ -59,6 +59,23 @@ if ($last_signal && !empty($last_signal['screening_candidate_id'])) {
 $target_price = $last_signal['target_price'] ?? null;
 $invalidation_price = $last_signal['invalidation_price'] ?? null;
 
+// Posizione in portafoglio (ultimo ciclo con ingresso eseguito): linee acquisto/target/stop e valori in €
+$pos_rows = supabase_query('trade_lifecycle', [
+    'select' => 'entry_fill_price,target_price,invalidation_price,quantity,fx_eur_per_local,state,entry_session_date',
+    'ticker' => 'eq.' . $ticker,
+    'entry_fill_price' => 'not.is.null',
+    'order' => 'created_at.desc',
+    'limit' => 1
+]);
+$pos = $pos_rows[0] ?? null;
+if ($pos && $pos['quantity'] !== null) {
+    $target_price = $pos['target_price'] ?? $target_price;
+    $invalidation_price = $pos['invalidation_price'] ?? $invalidation_price;
+    $pos_js = ['entry' => (float) $pos['entry_fill_price'], 'qty' => (float) $pos['quantity'], 'fx' => (float) ($pos['fx_eur_per_local'] ?? 1)];
+} else {
+    $pos_js = null;
+}
+
 // Statistiche rapide
 $last_close = !empty($daily) ? (float) end($daily)['close'] : null;
 $prev_close = count($daily) > 1 ? (float) $daily[count($daily) - 2]['close'] : null;
@@ -222,6 +239,7 @@ const intradayLabels = <?= json_encode($intraday_labels) ?>;
 const intradayValues = <?= json_encode($intraday_values) ?>;
 const targetPrice = <?= $target_price !== null ? json_encode((float) $target_price) : 'null' ?>;
 const invalidationPrice = <?= $invalidation_price !== null ? json_encode((float) $invalidation_price) : 'null' ?>;
+const posInfo = <?= json_encode($pos_js) ?>;
 
 // [FIX 24/09] Questo blocco duplicava per intero eurTick/sparseTicks/buildChart
 // già estratte in assets/charts.js il 19/09 (commento del refactor diceva
@@ -233,10 +251,10 @@ const invalidationPrice = <?= $invalidation_price !== null ? json_encode((float)
 // ReferenceError. Rimossa la copia: si usano solo le funzioni condivise
 // (già caricate da assets/charts.js) per evitare che le due versioni
 // divergano di nuovo in futuro.
-buildChart('dailyChart', dailyLabels, dailyValues, '#4f46e5', 'rgba(79,70,229,0.08)', 'Prezzo close', targetPrice, invalidationPrice);
-buildChart('monthlyChart', monthlyLabels, monthlyValues, '#0891b2', 'rgba(8,145,178,0.08)', 'Prezzo close', null, null);
-buildChart('weeklyChart', weeklyLabels, weeklyValues, '#ea580c', 'rgba(234,88,12,0.08)', 'Prezzo close (15m)', null, null);
-buildChart('intradayChart', intradayLabels, intradayValues, '#7c3aed', 'rgba(124,58,237,0.08)', 'Prezzo close (15m)', null, null);
+buildChart('dailyChart', dailyLabels, dailyValues, '#4f46e5', 'rgba(79,70,229,0.08)', 'Prezzo close', targetPrice, invalidationPrice, 'eur', posInfo);
+buildChart('monthlyChart', monthlyLabels, monthlyValues, '#0891b2', 'rgba(8,145,178,0.08)', 'Prezzo close', posInfo ? targetPrice : null, posInfo ? invalidationPrice : null, 'eur', posInfo);
+buildChart('weeklyChart', weeklyLabels, weeklyValues, '#ea580c', 'rgba(234,88,12,0.08)', 'Prezzo close (15m)', posInfo ? targetPrice : null, posInfo ? invalidationPrice : null, 'eur', posInfo);
+buildChart('intradayChart', intradayLabels, intradayValues, '#7c3aed', 'rgba(124,58,237,0.08)', 'Prezzo close (15m)', posInfo ? targetPrice : null, posInfo ? invalidationPrice : null, 'eur', posInfo);
 </script>
 
 <footer>SAPTA · <?= e($ticker) ?> · Pagina generata <?= date('d/m/Y H:i') ?></footer>
