@@ -98,6 +98,20 @@ function pf_position_charts($pid) {   // dati per i grafici delle posizioni (ape
     }
     return $out;
 }
+function pf_price_status($market, $price_as_of) {   // stato del prezzo: aggiornato / non aggiornato (borsa aperta) / ultima chiusura (borsa chiusa)
+    if (!$price_as_of) return 'n.d.';
+    $utc = new DateTimeZone('UTC');
+    $ts = new DateTime((string)$price_as_of, $utc);
+    $now = new DateTime('now', $utc);
+    $tzn = $market === 'EU' ? 'Europe/Rome' : 'America/New_York';
+    $loc = (clone $now)->setTimezone(new DateTimeZone($tzn));
+    $min = (int)$loc->format('G') * 60 + (int)$loc->format('i');
+    $open = (int)$loc->format('N') <= 5 && ($market === 'EU' ? ($min >= 540 && $min < 1050) : ($min >= 570 && $min < 960));
+    $age = (int)floor(($now->getTimestamp() - $ts->getTimestamp()) / 60);
+    $when = $ts->setTimezone(new DateTimeZone('Europe/Rome'))->format('d/m H:i');
+    if ($open) return $age > 45 ? '⚠️ NON AGGIORNATO (' . $when . ', ' . $age . ' min fa)' : '✅ ' . $when . ' (' . $age . ' min fa)';
+    return $when . ' · ultima chiusura (borsa chiusa)';
+}
 function pf_rpc($fn, $args) {
     $ch = curl_init(SUPABASE_URL . '/rest/v1/rpc/' . $fn);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_POST => true,
@@ -203,7 +217,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <div class="card"><p>Nessun dato letto: controlla la chiave in config_secret.php.</p>
     <p class="muted">Dettaglio: <?= e($GLOBALS['pf_err'] ?? 'nessuna riga nella vista') ?></p></div>
     <?php else:
-        $sig = pf_query('trade_lifecycle', ['select' => 'id,ticker,market,currency,entry_fill_price,quantity,fx_eur_per_local,invalidation_price,target_price,planned_time_exit_date,state,action_label,triggered_at', 'state' => 'in.(ENTRY_PENDING,ACTIVE)', 'order' => 'triggered_at.desc']);
+        $sig = pf_query('trade_lifecycle', ['select' => 'id,ticker,market,currency,entry_fill_price,quantity,fx_eur_per_local,invalidation_price,target_price,planned_time_exit_date,state,action_label,trigger_detected_at', 'state' => 'in.(ENTRY_PENDING,ACTIVE)', 'order' => 'trigger_detected_at.desc']);
     ?>
     <h2>Segnali operativi attivi (COMPRA ORA) <span class="badge"><?= count($sig) ?></span></h2>
     <div class="card">
@@ -245,12 +259,12 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <div class="card"><h3>Curva del capitale</h3><?= pf_curve($snap, $init) ?></div>
     <div class="card"><h3>Posizioni aperte (<?= count($pos) ?>)</h3>
     <?php if (!$pos): ?><p class="muted">Nessuna posizione aperta.</p><?php else: ?>
-        <div class="tw"><table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo del</th><?php if ($code === 'PORTAFOGLIO_UTENTE'): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
+        <div class="tw"><table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo (ora italiana)</th><?php if ($code === 'PORTAFOGLIO_UTENTE'): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
         <?php foreach ($pos as $r): $mk[$r['market']] = true; ?>
             <tr><td><a href="grafico.php?ticker=<?= urlencode($r['ticker']) ?>"><b><?= e($r['ticker']) ?></b></a></td><td><?= e(rtrim(rtrim(number_format((float)$r['quantity'], 4, '.', ''), '0'), '.')) ?></td>
             <td><?= fmt_eur($r['cost_basis_eur']) ?></td><td><?= fmt_eur($r['market_value_eur']) ?></td>
             <td><?= $r['unrealized_pnl_pct'] === null ? 'n.d.' : number_format((float)$r['unrealized_pnl_pct'], 2) . '%' ?></td>
-            <td><?= e(substr((string)$r['price_as_of'], 0, 16)) ?></td>
+            <td><?= e(pf_price_status($r['market'], $r['price_as_of'])) ?></td>
             <?php if ($code === 'PORTAFOGLIO_UTENTE'): ?>
             <?php $fv = 'fv' . (int)$r['position_id']; ?>
             <td><form id="<?= $fv ?>" method="post"></form>
