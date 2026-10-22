@@ -64,6 +64,40 @@ function pf_curve($rows, $init) {   // curva su base 100 con assi, griglia e val
     $svg .= '</svg>';
     return $svg . '<div class="muted">Ultimo valore: ' . number_format(end($v), 2) . ' (base 100) = ' . number_format(end($v) * $init / 100, 2, ',', '.') . ' € · ' . $lab[$n - 1] . ' ora italiana</div>';
 }
+function pf_position_charts($pid) {   // dati per i grafici delle posizioni (aperte e chiuse), prezzi in euro
+    $out = [];
+    $tz = new DateTimeZone('Europe/Rome'); $utc = new DateTimeZone('UTC');
+    $ps = pf_query('portfolio_positions', ['select' => 'id,ticker,currency,status,quantity,avg_cost_local,avg_cost_eur,opened_at,closed_at,lifecycle_id', 'portfolio_id' => 'eq.' . $pid, 'order' => 'opened_at.desc', 'limit' => 12]);
+    foreach ($ps as $r) {
+        if (empty($r['opened_at']) || (float)$r['avg_cost_local'] <= 0) continue;
+        $lc = null;
+        if (!empty($r['lifecycle_id'])) { $lr = pf_query('trade_lifecycle', ['select' => 'fx_eur_per_local,target_price,invalidation_price', 'id' => 'eq.' . (int)$r['lifecycle_id'], 'limit' => 1]); $lc = $lr[0] ?? null; }
+        if ($r['currency'] === 'EUR') $fx = 1.0;
+        elseif ($lc && (float)$lc['fx_eur_per_local'] > 0) $fx = (float)$lc['fx_eur_per_local'];
+        else $fx = (float)$r['avg_cost_eur'] / (float)$r['avg_cost_local'];
+        $t0 = new DateTime($r['opened_at'], $utc);
+        $start = (clone $t0)->modify('-8 days');
+        $t1 = !empty($r['closed_at']) ? new DateTime($r['closed_at'], $utc) : null;
+        $and = '(timestamp.gte.' . $start->format('Y-m-d\TH:i:s\Z') . ($t1 ? ',timestamp.lte.' . $t1->format('Y-m-d\TH:i:s\Z') : '') . ')';
+        $bars = pf_query('prezzi', ['select' => 'timestamp,close', 'ticker' => 'eq.' . $r['ticker'], 'interval' => 'eq.15m', 'and' => $and, 'order' => 'timestamp.asc', 'limit' => 3000]);
+        if (!$bars) continue;
+        $labels = []; $vals = []; $buy = -1; $sell = -1;
+        foreach ($bars as $i => $b) {
+            $d = new DateTime($b['timestamp'], $utc);
+            $ts = $d->getTimestamp();
+            $labels[] = $d->setTimezone($tz)->format('d/m H:i');
+            $vals[] = round((float)$b['close'] * $fx, 2);
+            if ($buy < 0 && $ts >= $t0->getTimestamp()) $buy = $i;
+            if ($t1 && $ts <= $t1->getTimestamp()) $sell = $i;
+        }
+        $out[] = ['id' => (int)$r['id'], 'ticker' => $r['ticker'], 'open' => $r['status'] === 'OPEN', 'labels' => $labels, 'values' => $vals,
+            'entry' => round((float)$r['avg_cost_local'] * $fx, 2), 'qty' => (float)$r['quantity'] * $fx,
+            'target' => ($lc && $lc['target_price'] !== null) ? round((float)$lc['target_price'] * $fx, 2) : null,
+            'stop' => ($lc && $lc['invalidation_price'] !== null) ? round((float)$lc['invalidation_price'] * $fx, 2) : null,
+            'buyIdx' => $buy, 'sellIdx' => $t1 ? $sell : -1, 'since' => (clone $t0)->setTimezone($tz)->format('d/m/Y H:i')];
+    }
+    return $out;
+}
 function pf_rpc($fn, $args) {
     $ch = curl_init(SUPABASE_URL . '/rest/v1/rpc/' . $fn);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_POST => true,
@@ -127,6 +161,8 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <title>SAPTA — Portafogli</title>
     <link rel="icon" href="assets/favicon.svg">
     <link rel="stylesheet" href="assets/style.css">
+    <script src="assets/chart.umd.min.js"></script>
+    <script src="assets/charts.js"></script>
     <style>
         .wrap h2 { margin: 32px 0 12px; line-height: 1.3; }
         .wrap h3 { margin: 0 0 10px; }
@@ -226,6 +262,11 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
             <?php endif; ?></tr>
         <?php endforeach; ?></table></div>
     <?php endif; ?></div>
+    <?php foreach (pf_position_charts($p['portfolio_id']) as $pc): $cid = 'pc' . $pc['id']; $GLOBALS['pf_pcs'][$cid] = $pc; ?>
+    <div class="card"><h3><a href="grafico.php?ticker=<?= urlencode($pc['ticker']) ?>"><?= e($pc['ticker']) ?></a> — andamento <?= $pc['open'] ? '(posizione aperta)' : '(chiusa)' ?> <span class="muted">acquisto del <?= e($pc['since']) ?></span></h3>
+        <div class="chart-wrap" style="height:280px"><canvas id="<?= $cid ?>"></canvas></div>
+        <div class="muted"><span style="color:#7c3aed">━ acquisto <?= number_format($pc['entry'], 2, ',', '.') ?> €</span> · <span style="color:#16a34a">━ target <?= $pc['target'] !== null ? number_format($pc['target'], 2, ',', '.') . ' €' : 'n.d.' ?></span> · <span style="color:#dc2626">━ invalidazione <?= $pc['stop'] !== null ? number_format($pc['stop'], 2, ',', '.') . ' €' : 'n.d.' ?></span> · da 8 giorni prima dell'acquisto <?= $pc['open'] ? 'a oggi' : 'alla vendita' ?></div></div>
+    <?php endforeach; ?>
     <div class="card"><h3>Ultime operazioni</h3>
     <?php if (!$txs): ?><p class="muted">Nessuna operazione registrata.</p><?php else: ?>
         <div class="tw"><table><tr><th>Data (UTC)</th><th>Operazione</th><th>Ticker</th><th>Quantità</th><th>Prezzo</th><th>Costi</th><th>Risultato</th></tr>
@@ -280,6 +321,13 @@ setInterval(function () {
     if (a && (a.name === 'quantita' || a.name === 'prezzo')) return;   // non perdere quanto stai scrivendo
     if (almenoUnaAperta()) location.href = location.pathname;           // GET, mai un nuovo invio di moduli
 }, 300000);
+</script>
+<script>
+(function () {
+    var d = <?= json_encode($GLOBALS['pf_pcs'] ?? new stdClass(), JSON_UNESCAPED_UNICODE) ?>;
+    if (typeof Chart === 'undefined' || typeof buildPositionChart === 'undefined') return;
+    Object.keys(d).forEach(function (id) { buildPositionChart(id, d[id]); });
+})();
 </script>
 <?php endif; ?>
 </body>

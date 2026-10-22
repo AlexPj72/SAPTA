@@ -119,3 +119,60 @@ function showChartErrors(ids) {
         if (el) el.style.display = 'block';
     });
 }
+
+
+/** Grafico di una posizione di portafoglio: prezzo in € (2 decimali) da almeno 7 giorni prima
+ *  dell'acquisto fino alla vendita (o a oggi se aperta). Linee: acquisto viola, target verde,
+ *  invalidazione rossa. Punti verdi/rossi dove il prezzo supera il target o scende sotto lo stop.
+ *  cfg = {labels, values, entry, target, stop, qty, buyIdx, sellIdx} (valori già in €). */
+function buildPositionChart(canvasId, cfg) {
+    if (typeof Chart === 'undefined') return;
+    const el = document.getElementById(canvasId);
+    if (!el || !cfg.values.length) return;
+    const eur = (v) => v.toLocaleString('it-IT', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' €';
+    const sgn = (v, d) => v.toLocaleString('it-IT', {minimumFractionDigits: d, maximumFractionDigits: d, signDisplay: 'always'});
+    const n = cfg.values.length, line = (v) => cfg.labels.map(() => v);
+    const col = [], rad = [];
+    cfg.values.forEach((v, i) => {
+        const up = cfg.target !== null && v >= cfg.target, dn = cfg.stop !== null && v <= cfg.stop;
+        const isBuy = i === cfg.buyIdx, isSell = i === cfg.sellIdx;
+        col.push(isBuy ? '#7c3aed' : (isSell ? '#111827' : (up ? '#16a34a' : (dn ? '#dc2626' : '#2563eb'))));
+        rad.push(isBuy || isSell ? 7 : (up || dn ? 4 : 0));
+    });
+    const datasets = [{
+        label: 'Prezzo', data: cfg.values, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.06)', fill: true,
+        tension: 0.2, borderWidth: 2, pointRadius: rad, pointBackgroundColor: col, pointBorderColor: col, pointHoverRadius: 5,
+    }, {
+        label: 'Acquisto', data: line(cfg.entry), borderColor: '#7c3aed', borderWidth: 1.8, borderDash: [4, 3], pointRadius: 0, fill: false,
+    }];
+    if (cfg.target !== null) datasets.push({label: 'Target da raggiungere', data: line(cfg.target), borderColor: '#16a34a', borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, fill: false});
+    if (cfg.stop !== null) datasets.push({label: 'Invalidazione', data: line(cfg.stop), borderColor: '#dc2626', borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, fill: false});
+    new Chart(el, {
+        type: 'line', data: {labels: cfg.labels, datasets},
+        options: {
+            responsive: true, maintainAspectRatio: false, interaction: {mode: 'index', intersect: false},
+            plugins: {
+                legend: {display: false},
+                tooltip: {
+                    backgroundColor: '#1c2333', padding: 10,
+                    callbacks: {
+                        label: (c) => c.dataset.label + ': ' + eur(c.parsed.y),
+                        afterBody: (items) => {
+                            const i = items[0].dataIndex, v = items[0].parsed.y, out = [];
+                            if (i === cfg.buyIdx) out.push('● ACQUISTO');
+                            if (i === cfg.sellIdx) out.push('● VENDITA');
+                            if (i >= cfg.buyIdx && cfg.buyIdx >= 0) out.push('Rispetto all\'acquisto: ' + sgn((v - cfg.entry) * cfg.qty, 2) + ' € (' + sgn((v / cfg.entry - 1) * 100, 2) + '%)');
+                            if (cfg.target !== null && v >= cfg.target) out.push('▲ Oltre il target');
+                            if (cfg.stop !== null && v <= cfg.stop) out.push('▼ Sotto l\'invalidazione');
+                            return out;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {grid: {display: false}, ticks: sparseTicks(cfg.labels)},
+                y: {grid: {color: '#eef0f5'}, ticks: {callback: (v) => v.toLocaleString('it-IT', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' €'}, title: {display: true, text: 'Prezzo (€)'}}
+            }
+        }
+    });
+}
