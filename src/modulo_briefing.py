@@ -26,6 +26,8 @@ Fail-open ovunque possibile: un ticker/paese/fonte che fallisce viene
 saltato con un dato neutro, non blocca l'intero briefing.
 """
 import os
+import sys
+import time
 import json
 import requests
 from datetime import datetime, timedelta, timezone
@@ -171,24 +173,32 @@ Rispondi SOLO con un array JSON, nessun altro testo, in questo formato:
 [{{"ticker": "XXX", "motivazione": "..."}}, ...]"""
 
 
-def call_gemini(prompt):
+def call_gemini(prompt, attempts=4, waits=(5, 15, 45)):
+    """Chiamata Gemini con ritentativi (503/429/5xx, timeout, risposta non valida). Ritorna None solo se falliscono tutti."""
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY non configurata, briefing non generato")
         return None
-    try:
-        r = requests.post(
-            GEMINI_API_URL,
-            headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=45,
-        )
-        r.raise_for_status()
-        content = r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        content = content.replace('```json', '').replace('```', '').strip()
-        return json.loads(content)
-    except Exception as e:
-        print(f"⚠️ Errore chiamata Gemini per il briefing: {e}")
-        return None
+    for n in range(1, attempts + 1):
+        try:
+            r = requests.post(
+                GEMINI_API_URL,
+                headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+                timeout=45,
+            )
+            if r.status_code in (400, 401, 403, 404):      # errori non transitori: inutile ritentare
+                r.raise_for_status()
+            r.raise_for_status()
+            content = r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            content = content.replace('```json', '').replace('```', '').strip()
+            return json.loads(content)
+        except Exception as e:
+            code = getattr(getattr(e, 'response', None), 'status_code', None)
+            print(f"⚠️ Errore chiamata Gemini per il briefing (tentativo {n}/{attempts}): {e}")
+            if code in (400, 401, 403, 404) or n == attempts:
+                return None
+            time.sleep(waits[min(n - 1, len(waits) - 1)])
+    return None
 
 
 def run_briefing():
@@ -216,13 +226,13 @@ def run_briefing():
 
     if not rows:
         print("⚠️ Nessun dato di prezzo disponibile, briefing annullato")
-        return
+        return False
 
     print(f"   {len(rows)} ticker con dati sufficienti, {len(headlines)} headline macro")
     prompt = build_prompt(rows, headlines)
     shortlist = call_gemini(prompt)
     if not shortlist:
-        return
+        return False
 
     today = datetime.now(timezone.utc).date().isoformat()
     # Rimuove eventuale briefing già generato oggi (un solo run al giorno atteso,
@@ -232,6 +242,7 @@ def run_briefing():
     except Exception as e:
         print(f"⚠️ Errore pulizia briefing precedente: {e}")
 
+    scritti = 0
     for i, item in enumerate(shortlist[:BRIEFING_TOP_N], start=1):
         ticker = item.get('ticker', '').strip()
         if not ticker:
@@ -249,12 +260,18 @@ def run_briefing():
                 'has_earnings': row_data.get('earnings', False),
                 'generated_at': datetime.now(timezone.utc).isoformat(),
             }).execute()
+            scritti += 1
             print(f"   {i}. {ticker}: {item.get('motivazione', '')[:80]}")
         except Exception as e:
             print(f"⚠️ Errore scrittura briefing per {ticker}: {e}")
 
+    if scritti == 0:
+        print("❌ Briefing non scritto: nessuna riga salvata")
+        return False
     print("✅ Briefing completato")
+    return True
 
 
 if __name__ == "__main__":
-    run_briefing()
+    # Esce con errore se il briefing non e' stato scritto: cosi' il run diventa rosso e arriva l'email di GitHub
+    sys.exit(0 if run_briefing() else 1)
