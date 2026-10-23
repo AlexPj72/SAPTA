@@ -64,10 +64,10 @@ function pf_curve($rows, $init) {   // curva su base 100 con assi, griglia e val
     $svg .= '</svg>';
     return $svg . '<div class="muted">Ultimo valore: ' . number_format(end($v), 2) . ' (base 100) = ' . number_format(end($v) * $init / 100, 2, ',', '.') . ' € · ' . $lab[$n - 1] . ' ora italiana</div>';
 }
-function pf_position_charts($pid) {   // dati per i grafici delle posizioni (aperte e chiuse), prezzi in euro
+function pf_position_charts($pid) {   // dati per i grafici delle sole posizioni aperte (le chiuse stanno in 'Cicli completati'), prezzi in euro
     $out = [];
     $tz = new DateTimeZone('Europe/Rome'); $utc = new DateTimeZone('UTC');
-    $ps = pf_query('portfolio_positions', ['select' => 'id,ticker,currency,status,quantity,avg_cost_local,avg_cost_eur,opened_at,closed_at,lifecycle_id', 'portfolio_id' => 'eq.' . $pid, 'order' => 'opened_at.desc', 'limit' => 12]);
+    $ps = pf_query('portfolio_positions', ['select' => 'id,ticker,currency,status,quantity,avg_cost_local,avg_cost_eur,opened_at,closed_at,lifecycle_id', 'portfolio_id' => 'eq.' . $pid, 'status' => 'eq.OPEN', 'order' => 'opened_at.desc', 'limit' => 12]);
     foreach ($ps as $r) {
         if (empty($r['opened_at']) || (float)$r['avg_cost_local'] <= 0) continue;
         $lc = null;
