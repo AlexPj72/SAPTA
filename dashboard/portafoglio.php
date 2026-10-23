@@ -112,6 +112,31 @@ function pf_price_status($market, $price_as_of) {   // stato del prezzo: aggiorn
     if ($open) return $age > 45 ? '⚠️ NON AGGIORNATO (' . $when . ', ' . $age . ' min fa)' : '✅ ' . $when . ' (' . $age . ' min fa)';
     return $when . ' · ultima chiusura (borsa chiusa)';
 }
+function pf_closed_cycles($pid) {   // cicli completati acquisto -> vendita: prezzi, rendimento al lordo delle commissioni, commissioni totali
+    $ps = pf_query('portfolio_positions', ['select' => 'id,ticker,currency,opened_at,closed_at', 'portfolio_id' => 'eq.' . $pid, 'status' => 'eq.CLOSED', 'order' => 'closed_at.desc', 'limit' => 50]);
+    if (!$ps) return [];
+    $ids = implode(',', array_map(function ($r) { return (int)$r['id']; }, $ps));
+    $txs = pf_query('portfolio_transactions', ['select' => 'position_id,tx_type,quantity,price_local,gross_amount_eur,fees_eur,executed_at', 'position_id' => 'in.(' . $ids . ')', 'order' => 'executed_at.asc', 'limit' => 1000]);
+    $by = [];
+    foreach ($txs as $t) $by[(int)$t['position_id']][] = $t;
+    $out = [];
+    foreach ($ps as $r) {
+        $a = ['qb' => 0.0, 'pb' => 0.0, 'eb' => 0.0, 'fb' => 0.0, 'qs' => 0.0, 'ps' => 0.0, 'es' => 0.0, 'fs' => 0.0];
+        foreach ($by[(int)$r['id']] ?? [] as $t) {
+            $q = (float)$t['quantity'];
+            if ($t['tx_type'] === 'BUY') { $a['qb'] += $q; $a['pb'] += $q * (float)$t['price_local']; $a['eb'] += (float)$t['gross_amount_eur']; $a['fb'] += (float)$t['fees_eur']; }
+            else { $a['qs'] += $q; $a['ps'] += $q * (float)$t['price_local']; $a['es'] += (float)$t['gross_amount_eur']; $a['fs'] += (float)$t['fees_eur']; }
+        }
+        if ($a['qb'] <= 0 || $a['qs'] <= 0 || $a['eb'] <= 0) continue;
+        $lordo = $a['es'] - $a['eb'];
+        $out[] = ['ticker' => $r['ticker'], 'cur' => $r['currency'] === 'USD' ? '$' : '€', 'qty' => $a['qb'],
+            'open' => $r['opened_at'], 'close' => $r['closed_at'],
+            'p_buy' => $a['pb'] / $a['qb'], 'p_sell' => $a['ps'] / $a['qs'], 'eur_buy' => $a['eb'], 'eur_sell' => $a['es'],
+            'lordo' => $lordo, 'pct' => $lordo / $a['eb'] * 100, 'f_buy' => $a['fb'], 'f_sell' => $a['fs'], 'f_tot' => $a['fb'] + $a['fs'],
+            'netto' => $lordo - $a['fb'] - $a['fs']];
+    }
+    return $out;
+}
 function pf_rpc($fn, $args) {
     $ch = curl_init(SUPABASE_URL . '/rest/v1/rpc/' . $fn);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_POST => true,
@@ -281,6 +306,23 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
         <div class="chart-wrap" style="height:280px"><canvas id="<?= $cid ?>"></canvas></div>
         <div class="muted"><span style="color:#7c3aed">━ acquisto <?= number_format($pc['entry'], 2, ',', '.') ?> €</span> · <span style="color:#16a34a">━ target <?= $pc['target'] !== null ? number_format($pc['target'], 2, ',', '.') . ' €' : 'n.d.' ?></span> · <span style="color:#dc2626">━ invalidazione <?= $pc['stop'] !== null ? number_format($pc['stop'], 2, ',', '.') . ' €' : 'n.d.' ?></span> · da 8 giorni prima dell'acquisto <?= $pc['open'] ? 'a oggi' : 'alla vendita' ?></div></div>
     <?php endforeach; ?>
+    <?php $cic = pf_closed_cycles($p['portfolio_id']); ?>
+    <div class="card"><h3>Cicli completati (acquisto → vendita)</h3>
+    <?php if (!$cic): ?><p class="muted">Nessun ciclo completato.</p><?php else: $tl = $tf = $tn = 0.0; ?>
+        <div class="tw"><table><tr><th>Ticker</th><th>Acquisto</th><th>Vendita</th><th>Rendimento € (escluse commissioni)</th><th>Rendimento %</th><th>Commissioni (acq. + vend. = totale)</th><th>Netto dopo commissioni</th></tr>
+        <?php foreach ($cic as $c): $tl += $c['lordo']; $tf += $c['f_tot']; $tn += $c['netto']; ?>
+            <tr><td><a href="grafico.php?ticker=<?= urlencode($c['ticker']) ?>"><?= e($c['ticker']) ?></a></td>
+            <td><?= e(substr((string)$c['open'], 0, 16)) ?> UTC<br><?= number_format($c['p_buy'], 2, ',', '.') ?> <?= $c['cur'] ?> × <?= e(rtrim(rtrim(number_format($c['qty'], 4, '.', ''), '0'), '.')) ?> = <?= number_format($c['eur_buy'], 2, ',', '.') ?> €</td>
+            <td><?= e(substr((string)$c['close'], 0, 16)) ?> UTC<br><?= number_format($c['p_sell'], 2, ',', '.') ?> <?= $c['cur'] ?> = <?= number_format($c['eur_sell'], 2, ',', '.') ?> €</td>
+            <td><?= ($c['lordo'] >= 0 ? '+' : '') . number_format($c['lordo'], 2, ',', '.') ?> €</td>
+            <td><?= ($c['pct'] >= 0 ? '+' : '') . number_format($c['pct'], 2, ',', '.') ?>%</td>
+            <td><?= number_format($c['f_buy'], 2, ',', '.') ?> + <?= number_format($c['f_sell'], 2, ',', '.') ?> = <?= number_format($c['f_tot'], 2, ',', '.') ?> €</td>
+            <td><?= ($c['netto'] >= 0 ? '+' : '') . number_format($c['netto'], 2, ',', '.') ?> €</td></tr>
+        <?php endforeach; ?>
+        <?php if (count($cic) > 1): ?><tr><td><b>Totale</b></td><td></td><td></td><td><b><?= ($tl >= 0 ? '+' : '') . number_format($tl, 2, ',', '.') ?> €</b></td><td></td><td><b><?= number_format($tf, 2, ',', '.') ?> €</b></td><td><b><?= ($tn >= 0 ? '+' : '') . number_format($tn, 2, ',', '.') ?> €</b></td></tr><?php endif; ?>
+        </table></div>
+        <p class="muted">Il rendimento è calcolato sul controvalore in euro di acquisto e vendita, senza commissioni; il netto le sottrae.</p>
+    <?php endif; ?></div>
     <div class="card"><h3>Ultime operazioni</h3>
     <?php if (!$txs): ?><p class="muted">Nessuna operazione registrata.</p><?php else: ?>
         <div class="tw"><table><tr><th>Data (UTC)</th><th>Operazione</th><th>Ticker</th><th>Quantità</th><th>Prezzo</th><th>Costi</th><th>Risultato</th></tr>
