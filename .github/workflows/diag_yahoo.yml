@@ -1,0 +1,55 @@
+name: Diagnostica Yahoo (sola lettura)
+
+# Solo manuale. Nessun segreto, nessuna scrittura su database o repository.
+# Scarica da Yahoo gli stessi 22 titoli USA scartati da Modulo B e mostra le ultime barre.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: requirements-slow.txt
+      - name: Installa le stesse dipendenze di Slow
+        run: |
+          python -m pip install --upgrade pip
+          pip install --retries 5 --timeout 60 -r requirements-slow.txt
+      - name: Scarica da Yahoo e stampa le ultime barre
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          import numpy as np, pandas as pd, yfinance as yf
+          t = ["NFLX","PM","LLY","AMD","GOOGL","VZ","TXN","IBM","MS","SHOP","META","MELI","MU","CRWD","GOOG","T","AMAT","ISRG","NVDA","GE","ABT","GS"]
+          now = dt.datetime.now(dt.timezone.utc)
+          df = yf.download(t, period="60d", interval="1d", group_by="ticker", auto_adjust=True, progress=False)
+          head = f"ora UTC {now:%Y-%m-%d %H:%M} | yfinance {yf.__version__} pandas {pd.__version__} numpy {np.__version__}"
+          print(head)
+          righe = [head]
+          for x in t:
+              try:
+                  raw = df[x]
+              except Exception as e:
+                  righe.append(f"{x}: ERRORE {e}")
+                  continue
+              s = raw.dropna(how="all")
+              if s.empty:
+                  righe.append(f"{x}: nessun dato")
+                  continue
+              last = s.iloc[-1]
+              nan_tot = int(s.isna().sum().sum())
+              nan_last = [c for c in s.columns if pd.isna(last[c])]
+              righe.append(f"{x}: ultima={s.index[-1].date()} nan_totali={nan_tot} nan_ultima_riga={nan_last} close={last['Close']} vol={last['Volume']}")
+          for r in righe[1:]:
+              print(r)
+          msg = "%0A".join(righe)
+          print(f"::notice title=diag Yahoo::{msg}")
+          PY
