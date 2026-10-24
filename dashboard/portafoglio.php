@@ -154,9 +154,43 @@ function pf_fees($market, $value_eur) {
     }
     return 0.0;
 }
+function pf_buy_warnings($ticker, $qty, $price, $fx, $market, $fees, $lc) {   // avvisi NON bloccanti dopo un acquisto del portafoglio utente
+    $w = [];
+    $sm = pf_query('v_portfolio_summary', ['select' => 'portfolio_id,equity_eur,committed_capital_eur', 'code' => 'eq.PORTAFOGLIO_UTENTE', 'limit' => 1]);
+    $pf = $sm[0] ?? null;
+    if (!$pf || (float)$pf['equity_eur'] <= 0) return $w;
+    $eq = (float)$pf['equity_eur'];
+    // 1) rischio dell'operazione: distanza dallo stop + commissioni di ingresso e di uscita stimate, contro l'1% del capitale
+    $stop = null;
+    if ($lc) { $l = pf_query('trade_lifecycle', ['select' => 'invalidation_price', 'id' => 'eq.' . (int)$lc, 'limit' => 1]); $stop = $l[0]['invalidation_price'] ?? null; }
+    if ($stop === null) $w[] = 'nessuno stop associato: rischio dell\'operazione non calcolabile';
+    else {
+        $rischio = $qty * ($price - (float)$stop) * $fx + $fees + pf_fees($market, $qty * (float)$stop * $fx);
+        $max = $eq * 0.01;
+        $txt = 'rischio fino allo stop ' . number_format($rischio, 2, ',', '.') . ' € (limite 1% = ' . number_format($max, 2, ',', '.') . ' €), commissioni di ingresso e uscita incluse';
+        $w[] = $rischio > $max ? 'SOPRA IL LIMITE: ' . $txt : $txt;
+    }
+    // 2) esposizione complessiva dopo l'acquisto, contro il 60% del capitale
+    $esp = (float)$pf['committed_capital_eur'] / $eq * 100;
+    $w[] = ($esp > 60 ? 'SOPRA IL LIMITE: ' : '') . 'esposizione ' . number_format($esp, 1, ',', '.') . '% del capitale (limite 60%)';
+    // 3) altri titoli aperti dello stesso settore (limite 2 per settore)
+    $sec = pf_query('ticker_sectors', ['select' => 'sector', 'ticker' => 'eq.' . $ticker, 'limit' => 1]);
+    $settore = $sec[0]['sector'] ?? null;
+    if (!$settore) $w[] = 'settore di ' . $ticker . ' non noto: controllo per settore non possibile';
+    else {
+        $open = pf_query('portfolio_positions', ['select' => 'ticker', 'portfolio_id' => 'eq.' . (int)$pf['portfolio_id'], 'status' => 'eq.OPEN']);
+        $tk = array_values(array_filter(array_map(function ($r) { return $r['ticker']; }, $open), function ($t) use ($ticker) { return $t !== $ticker; }));
+        $same = [];
+        if ($tk) { $sr = pf_query('ticker_sectors', ['select' => 'ticker', 'sector' => 'eq.' . $settore, 'ticker' => 'in.(' . implode(',', $tk) . ')']); $same = array_map(function ($r) { return $r['ticker']; }, $sr); }
+        $n = count($same) + 1;
+        if ($same) $w[] = ($n > 2 ? 'SOPRA IL LIMITE: ' : '') . 'settore ' . $settore . ': con questo acquisto hai ' . $n . ' titoli (' . implode(', ', $same) . ' + ' . $ticker . '), limite 2';
+        else $w[] = 'settore ' . $settore . ': è il tuo unico titolo di questo settore';
+    }
+    return $w;
+}
 function pf_num($v) { return (float) str_replace(',', '.', trim((string)$v)); }
 
-$mk = []; $msg = ''; $msg_err = false; $logged = !empty($_SESSION['pf_ok']);
+$mk = []; $msg = ''; $msg_err = false; $warns = []; $logged = !empty($_SESSION['pf_ok']);
 if ($pw_ok && !$logged && isset($_POST['password'])) {
     if (hash_equals(PORTAFOGLIO_PASSWORD, (string)$_POST['password'])) { $_SESSION['pf_ok'] = true; $_SESSION['csrf'] = bin2hex(random_bytes(16)); header('Location: portafoglio.php'); exit; }
     $msg = 'Password errata'; $msg_err = true;
@@ -186,6 +220,7 @@ if ($pw_ok && $logged && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['
                 'p_lifecycle_id' => $lc ?: null]);
             $msg = $ok ? (($out['duplicate'] ?? false) ? 'Operazione già registrata' : ($buy ? "Acquisto di $ticker registrato" : "Vendita di $ticker registrata")) : ('Operazione rifiutata: ' . $err);
             $msg_err = !$ok;
+            if ($ok && $buy && !($out['duplicate'] ?? false)) { try { $warns = pf_buy_warnings($ticker, $qty, $price, $fx, $market, $fees, $lc); } catch (Throwable $e) { $warns = []; } }
         }
     }
 }
@@ -237,6 +272,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <?php if ($msg): ?><p class="muted"><?= e($msg) ?></p><?php endif; ?></form></div>
 <?php else: ?>
     <?php if ($msg): ?><div class="card"><p><b><?= $msg_err ? '⚠️ ' : '✅ ' ?><?= e($msg) ?></b></p></div><?php endif; ?>
+    <?php if ($warns): ?><div class="card"><p><b>Controlli sulle regole (avvisi, l'acquisto è già registrato)</b></p><ul><?php foreach ($warns as $w): ?><li><?= strpos($w, 'SOPRA IL LIMITE') === 0 ? '⚠️ ' : 'ℹ️ ' ?><?= e($w) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
     <p class="muted"><a href="portafoglio.php?esci=1">Esci</a></p>
     <?php if (!$sum): ?>
     <div class="card"><p>Nessun dato letto: controlla la chiave in config_secret.php.</p>
