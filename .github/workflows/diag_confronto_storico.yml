@@ -1,0 +1,49 @@
+name: Diagnostica confronto storico Yahoo vs database (sola lettura)
+
+# Solo manuale. Nessun segreto, nessuna scrittura su database o repository.
+# I valori del database per il campione sono incollati qui sotto (letti in sola lettura).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  confronto:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Installa yfinance
+        run: pip install --retries 5 --timeout 60 yfinance
+      - name: Confronta Yahoo con i valori del database
+        run: |
+          python - <<'PY'
+          import json, yfinance as yf, pandas as pd
+          DB = json.loads('''{"T":{"2024-09-12":19.6934,"2024-12-02":20.9717,"2025-03-03":25.9346,"2025-06-02":26.4084,"2026-01-02":23.7065,"2026-04-01":27.6466,"2026-07-01":20.2094,"2026-10-01":24.3,"2026-10-15":23.5},"MO":{"2024-09-12":45.791,"2024-12-02":50.7171,"2025-03-03":51.8209,"2025-06-02":55.8104,"2026-01-02":55.535,"2026-04-01":64.5152,"2026-07-01":71.54,"2026-10-01":66.95,"2026-10-15":73.84},"PG":{"2024-09-12":164.3587,"2024-12-02":171.2625,"2025-03-03":168.3659,"2025-06-02":161.88,"2026-01-02":138.7027,"2026-04-01":141.9534,"2026-07-01":146.3376,"2026-10-01":143.95,"2026-10-15":157.08},"VZ":{"2024-09-12":38.4707,"2024-12-02":39.0623,"2025-03-03":39.7727,"2025-06-02":40.6234,"2026-01-02":38.5811,"2026-04-01":47.8426,"2026-07-01":41.2862,"2026-10-01":45.98,"2026-10-15":44.4},"AMGN":{"2024-09-12":310.7604,"2024-12-02":263.9326,"2025-03-03":297.3306,"2025-06-02":278.4251,"2026-01-02":321.0703,"2026-04-01":348.595,"2026-07-01":359.2306,"2026-10-01":407.27,"2026-10-15":434.03},"NVDA":{"2024-09-12":118.8212,"2024-12-02":138.259,"2025-03-03":113.7626,"2025-06-02":137.0344,"2026-01-02":188.4091,"2026-04-01":175.3492,"2026-07-01":197.3592,"2026-10-01":230.86,"2026-10-15":217.23},"A2A.MI":{"2024-09-12":1.9006,"2024-12-02":1.9435,"2025-03-03":1.9882,"2025-06-02":2.1844,"2025-09-01":2.0403,"2026-01-02":2.2083,"2026-04-01":2.3447,"2026-07-01":2.224,"2026-10-01":2.232,"2026-10-15":2.357},"TRN.MI":{"2024-09-12":7.3829,"2024-12-02":7.4087,"2025-03-03":7.4217,"2025-06-02":8.4286,"2025-09-01":8.1591,"2026-01-02":8.8348,"2026-04-01":9.6484,"2026-07-01":10.095,"2026-10-01":9.138,"2026-10-15":9.372},"UCG.MI":{"2024-09-12":33.6467,"2024-12-02":34.0678,"2025-03-03":48.105,"2025-06-02":54.0646,"2025-09-01":63.6223,"2026-01-02":69.3377,"2026-04-01":62.7494,"2026-07-01":78.68,"2026-10-01":79.53,"2026-10-15":75.14}}''')
+          righe = []
+          for t, dates in DB.items():
+              d = yf.download(t, start="2024-09-01", interval="1d", auto_adjust=True, progress=False)
+              if isinstance(d.columns, pd.MultiIndex):
+                  d.columns = d.columns.get_level_values(0)
+              d.index = d.index.strftime("%Y-%m-%d")
+              diffs = []
+              for dt, v in dates.items():
+                  if dt in d.index:
+                      y = float(d.loc[dt, "Close"])
+                      diffs.append((dt, v, y, (y / v - 1) * 100))
+                  else:
+                      diffs.append((dt, v, None, None))
+              ok = [x for x in diffs if x[3] is not None]
+              mx = max((abs(x[3]) for x in ok), default=None)
+              righe.append(f"{t}: max scarto {mx:.2f}% su {len(ok)}/{len(diffs)} date" if mx is not None else f"{t}: nessun confronto")
+              for dt, v, y, p in diffs:
+                  if y is None:
+                      righe.append(f"   {dt} db={v} yahoo=ASSENTE")
+                  elif abs(p) > 0.30:
+                      righe.append(f"   {dt} db={v} yahoo={y:.4f} scarto={p:+.2f}%")
+          for r in righe: print(r)
+          print("::notice title=confronto Yahoo vs DB::" + "%0A".join(righe))
+          PY
