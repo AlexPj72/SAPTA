@@ -1,0 +1,184 @@
+name: Diagnostica impatto upsert storico (sola lettura)
+
+# Solo manuale. Usa il segreto Supabase ESCLUSIVAMENTE per richieste GET (lettura di prezzi).
+# Nessuna scrittura su database o repository: confronta il database con Yahoo e stampa i risultati.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  impatto:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Installa dipendenze
+        run: pip install --retries 5 --timeout 60 yfinance requests pandas numpy
+      - name: Confronto database contro Yahoo (sola lettura)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python - <<'PY'
+          import os, requests, pandas as pd, numpy as np, yfinance as yf, time
+
+          URL = os.environ["SUPABASE_URL"].rstrip("/")
+          KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+          H = {"apikey": KEY, "Authorization": "Bearer " + KEY}          # solo richieste GET: nessuna scrittura
+          IDX = ["^GSPC", "FTSEMIB.MI"]
+          SC = [("nessuno", "n", 0), ("stop3", "s", .03), ("stop5", "s", .05), ("stop8", "s", .08), ("trail3", "t", .03), ("trail5", "t", .05), ("trail8", "t", .08)]
+
+
+          def fetch_db():
+              rows, off = [], 0
+              while True:
+                  r = requests.get(URL + "/rest/v1/prezzi", headers=H, timeout=90, params={
+                      "select": "ticker,timestamp,open,high,low,close,volume", "interval": "eq.1d",
+                      "order": "ticker.asc,timestamp.asc", "limit": "1000", "offset": str(off)})
+                  r.raise_for_status()
+                  b = r.json()
+                  rows += b
+                  if len(b) < 1000:
+                      break
+                  off += 1000
+              df = pd.DataFrame(rows)
+              df["date"] = pd.to_datetime(df["timestamp"], utc=True).dt.strftime("%Y-%m-%d")
+              for c in ["open", "high", "low", "close", "volume"]:
+                  df[c] = pd.to_numeric(df[c], errors="coerce")
+              return df[~df.ticker.isin(IDX)]
+
+
+          def fetch_yahoo(tickers):
+              out = {}
+              for i in range(0, len(tickers), 20):
+                  b = tickers[i:i + 20]
+                  try:
+                      df = yf.download(b, start="2019-06-01", interval="1d", auto_adjust=True, group_by="ticker", progress=False)
+                  except Exception:
+                      df = None
+                  for t in b:
+                      try:
+                          d = df[t].dropna(subset=["Close"])
+                          d = d.copy()
+                          d.index = d.index.strftime("%Y-%m-%d")
+                          out[t] = d
+                      except Exception:
+                          pass
+                  time.sleep(3)
+              return out
+
+
+          def event_nets(t, o, h, l, c, dates, start="0000-00-00"):
+              """Eventi: rialzo giornaliero >= 10% (chiusura su chiusura precedente); ingresso all'apertura del giorno dopo, 10 sedute."""
+              cost = 1.4 if t.endswith(".MI") else 0.1
+              res = []
+              for i in range(1, len(c) - 10):
+                  if dates[i] < start or c[i] / c[i - 1] - 1 < 0.10:
+                      continue
+                  E = o[i + 1]
+                  nets = {}
+                  for name, kind, p in SC:
+                      xp, rm = None, E
+                      for k in range(1, 11):
+                          j = i + k
+                          rmp = rm
+                          rm = max(rm, h[j])
+                          if kind == "s" and l[j] <= E * (1 - p):
+                              xp = min(o[j], E * (1 - p)); break
+                          if kind == "t":
+                              if o[j] <= rmp * (1 - p):
+                                  xp = o[j]; break
+                              if l[j] <= rm * (1 - p):
+                                  xp = rm * (1 - p); break
+                      if xp is None:
+                          xp = c[i + 10]
+                      nets[name] = (xp / E - 1) * 100 - cost
+                  res.append((t, dates[i], nets))
+              return res
+
+
+          def run_events(frames, start="0000-00-00"):
+              ev = []
+              for t, d in frames.items():
+                  d = d.sort_index()
+                  d = d[(d["Open"] > 0) & (d["High"] > 0) & (d["Low"] > 0) & (d["Close"] > 0)]
+                  if len(d) < 15:
+                      continue
+                  ev += event_nets(t, d["Open"].values, d["High"].values, d["Low"].values, d["Close"].values, list(d.index), start)
+              return ev
+
+
+          def means(ev):
+              if not ev:
+                  return "n=0"
+              return f"n={len(ev)} " + " ".join(f"{n}={np.mean([e[2][n] for e in ev]):+.2f}" for n, _, _ in SC)
+
+
+          db = fetch_db()
+          tickers = sorted(db.ticker.unique())
+          Y = fetch_yahoo(tickers)
+
+          # ---------- 1) impatto dell'upsert e 2) coerenza della rettifica ----------
+          tot = dict(db=0, uguali=0, cambiate=0, assenti_y=0, nuove_y=0)
+          cat = {"invariata": [], "offset costante": [], "a gradini": [], "senza dati Yahoo": []}
+          dett = []
+          for t, g in db.groupby("ticker"):
+              g = g.set_index("date")
+              y = Y.get(t)
+              tot["db"] += len(g)
+              if y is None:
+                  cat["senza dati Yahoo"].append(t); continue
+              com = g.index.intersection(y.index)
+              tot["assenti_y"] += len(g) - len(com)
+              tot["nuove_y"] += int((y.index < g.index.min()).sum())
+              gg, yy = g.loc[com], y.loc[com]
+              dc = (yy["Close"] / gg["close"] - 1) * 100
+              ohl = pd.concat([(yy[a] / gg[b] - 1).abs() for a, b in [("Open", "open"), ("High", "high"), ("Low", "low")]], axis=1).max(axis=1) > 1e-4
+              ch = (dc.abs() > 0.01) | ohl
+              tot["uguali"] += int((~ch).sum())
+              tot["cambiate"] += int(ch.sum())
+              if ch.sum() == 0:
+                  cat["invariata"].append(t)
+              else:
+                  x = dc[ch]
+                  k = "offset costante" if (x.max() - x.min()) < 0.15 else "a gradini"
+                  cat[k].append(t)
+                  dett.append(f"{t} [{k}] righe cambiate {int(ch.sum())}/{len(g)} scarto {x.min():+.2f}..{x.max():+.2f}%")
+          m1 = ["RIGHE DB (1d, esclusi indici): %d | invariate %d | cambierebbero %d | assenti su Yahoo %d | righe nuove (storico piu' vecchio) %d"
+                % (tot["db"], tot["uguali"], tot["cambiate"], tot["assenti_y"], tot["nuove_y"])]
+          m1 += [f"{k}: {len(v)} titoli" for k, v in cat.items()]
+          m1 += ["A GRADINI: " + ", ".join(cat["a gradini"])] if cat["a gradini"] else []
+          m1 += dett[:60]
+          print("\n".join(m1))
+          print("::notice title=1 impatto upsert e coerenza::" + "%0A".join(m1))
+
+          # ---------- 3) eventi: DB (misto) contro Yahoo (rettificato) sulla stessa finestra ----------
+          START = "2024-09-12"
+          fr_db = {t: g.set_index("date")[["open", "high", "low", "close"]].rename(columns=str.capitalize) for t, g in db.groupby("ticker")}
+          fr_y = {t: d[["Open", "High", "Low", "Close"]] for t, d in Y.items()}
+          ev_db, ev_y = run_events(fr_db, START), run_events(fr_y, START)
+          kd, ky = {(e[0], e[1]): e for e in ev_db}, {(e[0], e[1]): e for e in ev_y}
+          common = set(kd) & set(ky)
+          dmax = max((abs(kd[k][2][n] - ky[k][2][n]) for k in common for n, _, _ in SC), default=0)
+          m3 = [f"FINESTRA dal {START}: eventi DB {len(ev_db)} | eventi Yahoo {len(ev_y)} | in comune {len(common)} | solo DB {len(set(kd) - set(ky))} | solo Yahoo {len(set(ky) - set(kd))}",
+                f"scarto massimo sul rendimento netto di un evento in comune: {dmax:.2f} punti",
+                "DB   : " + means(ev_db), "Yahoo: " + means(ev_y)]
+          print("\n".join(m3))
+          print("::notice title=3 eventi DB contro Yahoo::" + "%0A".join(m3))
+
+          # ---------- storico completo dal 2019 su Yahoo (nessuna scrittura) ----------
+          ev_all = run_events(fr_y)
+          m4 = ["TUTTI I TITOLI su Yahoo dal 2019, rialzo >= +10%, ingresso apertura giorno dopo, 10 sedute (medie nette %)"]
+          for yv in sorted({e[1][:4] for e in ev_all}):
+              sub = [e for e in ev_all if e[1][:4] == yv]
+              m4.append(f"{yv}: " + means(sub))
+          m4.append("TOTALE: " + means(ev_all))
+          m4.append("TOTALE senza 2020: " + means([e for e in ev_all if e[1][:4] != "2020"]))
+          m4.append("Solo 2025-2026: " + means([e for e in ev_all if e[1][:4] in ("2025", "2026")]))
+          print("\n".join(m4))
+          print("::notice title=4 storico completo Yahoo::" + "%0A".join(m4))
+          PY
