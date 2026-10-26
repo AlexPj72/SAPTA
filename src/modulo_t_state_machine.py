@@ -762,19 +762,28 @@ def test_alert(sb, now):
     print(f"✅ prova notifiche completata: {eng.alert_stats}")
 
 
-def snapshot_if_due(sb, now, every_minutes=55):
-    """Fotografia del portafoglio (curva del capitale): al piu' una ogni ~ora, mai bloccante."""
+SNAPSHOT_EXTRA_CODES = ['PORTAFOGLIO_CHATGPT']   # altri portafogli da fotografare ogni ora (il portafoglio AI resta quello della macchina a stati)
+
+
+def _snapshot_one(sb, now, code, every_minutes):
+    """Fotografia di un portafoglio (curva del capitale): al piu' una ogni ~ora, mai bloccante."""
     try:
-        pf = sb.table('portfolios').select('id').eq('code', PORTFOLIO_CODE).execute().data
+        pf = sb.table('portfolios').select('id').eq('code', code).execute().data
         if not pf:
             return
         last = sb.table('portfolio_snapshots').select('snapshot_at').eq('portfolio_id', pf[0]['id']).order('snapshot_at', desc=True).limit(1).execute().data
         if last and parse_ts(last[0]['snapshot_at']) > now - timedelta(minutes=every_minutes):
             return
-        sb.rpc('portfolio_snapshot', {'p_code': PORTFOLIO_CODE, 'p_snapshot_at': _iso(now)}).execute()
-        print('📸 snapshot portafoglio registrato')
+        sb.rpc('portfolio_snapshot', {'p_code': code, 'p_snapshot_at': _iso(now)}).execute()
+        print(f'📸 snapshot portafoglio registrato ({code})')
     except Exception as e:
-        print(f'⚠️ snapshot portafoglio non registrato: {e}')
+        print(f'⚠️ snapshot portafoglio non registrato ({code}): {e}')
+
+
+def snapshot_if_due(sb, now, every_minutes=55):
+    """Istantanea oraria del portafoglio AI e degli altri portafogli elencati in SNAPSHOT_EXTRA_CODES."""
+    for code in [PORTFOLIO_CODE] + SNAPSHOT_EXTRA_CODES:
+        _snapshot_one(sb, now, code, every_minutes)
 
 
 def main():

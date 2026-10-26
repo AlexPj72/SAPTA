@@ -154,15 +154,17 @@ function pf_fees($market, $value_eur) {
     }
     return 0.0;
 }
-function pf_buy_warnings($ticker, $qty, $price, $fx, $market, $fees, $lc) {   // avvisi NON bloccanti dopo un acquisto del portafoglio utente
+const PF_OPERABILI = ['PORTAFOGLIO_UTENTE', 'PORTAFOGLIO_CHATGPT'];   // portafogli su cui la pagina registra acquisti e vendite (non quello AI)
+function pf_buy_warnings($pcode, $ticker, $qty, $price, $fx, $market, $fees, $lc, $stop_in = 0) {   // avvisi NON bloccanti dopo un acquisto
     $w = [];
-    $sm = pf_query('v_portfolio_summary', ['select' => 'portfolio_id,equity_eur,committed_capital_eur', 'code' => 'eq.PORTAFOGLIO_UTENTE', 'limit' => 1]);
+    $sm = pf_query('v_portfolio_summary', ['select' => 'portfolio_id,equity_eur,committed_capital_eur', 'code' => 'eq.' . $pcode, 'limit' => 1]);
     $pf = $sm[0] ?? null;
     if (!$pf || (float)$pf['equity_eur'] <= 0) return $w;
     $eq = (float)$pf['equity_eur'];
     // 1) rischio dell'operazione: distanza dallo stop + commissioni di ingresso e di uscita stimate, contro l'1% del capitale
     $stop = null;
     if ($lc) { $l = pf_query('trade_lifecycle', ['select' => 'invalidation_price', 'id' => 'eq.' . (int)$lc, 'limit' => 1]); $stop = $l[0]['invalidation_price'] ?? null; }
+    if ($stop === null && $stop_in > 0) $stop = $stop_in;
     if ($stop === null) $w[] = 'nessuno stop associato: rischio dell\'operazione non calcolabile';
     else {
         $rischio = $qty * ($price - (float)$stop) * $fx + $fees + pf_fees($market, $qty * (float)$stop * $fx);
@@ -201,26 +203,28 @@ if ($pw_ok && $logged && isset($_GET['esci'])) { session_destroy(); header('Loca
 if ($pw_ok && $logged && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione'])) {
     if (!hash_equals($_SESSION['csrf'], (string)($_POST['csrf'] ?? ''))) { $msg = 'Sessione scaduta, riprova'; $msg_err = true; }
     else {
+        $pcode = in_array($_POST['portafoglio'] ?? 'PORTAFOGLIO_UTENTE', PF_OPERABILI, true) ? $_POST['portafoglio'] : 'PORTAFOGLIO_UTENTE';
+        $pre = $pcode === 'PORTAFOGLIO_CHATGPT' ? 'GPT' : 'USER';
         $qty = pf_num($_POST['quantita'] ?? 0); $price = pf_num($_POST['prezzo'] ?? 0);
         $ticker = preg_replace('/[^A-Z0-9.\-]/', '', strtoupper((string)($_POST['ticker'] ?? '')));
         $market = ($_POST['mercato'] ?? '') === 'EU' ? 'EU' : 'USA';
         $cur = $market === 'EU' ? 'EUR' : 'USD';
-        $fx = pf_num($_POST['fx'] ?? 1);
+        $fx = $market === 'EU' ? 1.0 : pf_num($_POST['fx'] ?? 1);
         if ($qty <= 0 || $price <= 0 || $fx <= 0 || $ticker === '') { $msg = 'Quantità, prezzo e ticker devono essere validi'; $msg_err = true; }
         else {
             $buy = $_POST['azione'] === 'compra';
             $lc = (int)($_POST['lifecycle_id'] ?? 0);
             $fees = pf_fees($market, $qty * $price * $fx);
             [$ok, $out, $code, $err] = pf_rpc('portfolio_execute_trade', [
-                'p_code' => 'PORTAFOGLIO_UTENTE', 'p_ticker' => $ticker, 'p_side' => $buy ? 'BUY' : 'SELL', 'p_quantity' => $qty,
+                'p_code' => $pcode, 'p_ticker' => $ticker, 'p_side' => $buy ? 'BUY' : 'SELL', 'p_quantity' => $qty,
                 'p_price_local' => $price, 'p_executed_at' => gmdate('c'),
-                'p_idempotency_key' => $buy ? ('USER-BUY-' . $ticker . '-' . ($lc ?: gmdate('YmdHi'))) : ('USER-SELL-' . $ticker . '-' . gmdate('YmdHi')),
+                'p_idempotency_key' => $buy ? ($pre . '-BUY-' . $ticker . '-' . ($lc ?: gmdate('YmdHi'))) : ($pre . '-SELL-' . $ticker . '-' . gmdate('YmdHi')),
                 'p_market' => $market, 'p_currency' => $cur, 'p_fx_eur_per_local' => $fx, 'p_fees_eur' => $fees,
                 'p_price_reference' => $price, 'p_slippage_pct' => 0, 'p_source_type' => ($buy && $lc) ? 'LIFECYCLE' : 'MANUAL',
                 'p_lifecycle_id' => $lc ?: null]);
             $msg = $ok ? (($out['duplicate'] ?? false) ? 'Operazione già registrata' : ($buy ? "Acquisto di $ticker registrato" : "Vendita di $ticker registrata")) : ('Operazione rifiutata: ' . $err);
             $msg_err = !$ok;
-            if ($ok && $buy && !($out['duplicate'] ?? false)) { try { $warns = pf_buy_warnings($ticker, $qty, $price, $fx, $market, $fees, $lc); } catch (Throwable $e) { $warns = []; } }
+            if ($ok && $buy && !($out['duplicate'] ?? false)) { try { $warns = pf_buy_warnings($pcode, $ticker, $qty, $price, $fx, $market, $fees, $lc, pf_num($_POST['stop'] ?? 0)); } catch (Throwable $e) { $warns = []; } }
         }
     }
 }
@@ -320,16 +324,16 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <div class="card"><h3>Curva del capitale</h3><?= pf_curve($snap, $init) ?></div>
     <div class="card"><h3>Posizioni aperte (<?= count($pos) ?>)</h3>
     <?php if (!$pos): ?><p class="muted">Nessuna posizione aperta.</p><?php else: ?>
-        <div class="tw"><table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo (ora italiana)</th><?php if ($code === 'PORTAFOGLIO_UTENTE'): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
+        <div class="tw"><table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo (ora italiana)</th><?php if (in_array($code, PF_OPERABILI, true)): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
         <?php foreach ($pos as $r): $mk[$r['market']] = true; ?>
             <tr><td><a href="grafico.php?ticker=<?= urlencode($r['ticker']) ?>"><b><?= e($r['ticker']) ?></b></a></td><td><?= e(rtrim(rtrim(number_format((float)$r['quantity'], 4, '.', ''), '0'), '.')) ?></td>
             <td><?= fmt_eur($r['cost_basis_eur']) ?></td><td><?= fmt_eur($r['market_value_eur']) ?></td>
             <td><?= $r['unrealized_pnl_pct'] === null ? 'n.d.' : number_format((float)$r['unrealized_pnl_pct'], 2) . '%' ?></td>
             <td><?= e(pf_price_status($r['market'], $r['price_as_of'])) ?></td>
-            <?php if ($code === 'PORTAFOGLIO_UTENTE'): ?>
+            <?php if (in_array($code, PF_OPERABILI, true)): ?>
             <?php $fv = 'fv' . (int)$r['position_id']; ?>
             <td><form id="<?= $fv ?>" method="post"></form>
-                <input form="<?= $fv ?>" type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>"><input form="<?= $fv ?>" type="hidden" name="azione" value="vendi">
+                <input form="<?= $fv ?>" type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>"><input form="<?= $fv ?>" type="hidden" name="azione" value="vendi"><input form="<?= $fv ?>" type="hidden" name="portafoglio" value="<?= e($code) ?>">
                 <input form="<?= $fv ?>" type="hidden" name="ticker" value="<?= e($r['ticker']) ?>"><input form="<?= $fv ?>" type="hidden" name="mercato" value="<?= e($r['market']) ?>"><input form="<?= $fv ?>" type="hidden" name="fx" value="<?= e($r['fx_eur_per_local_used']) ?>">
                 <input form="<?= $fv ?>" name="quantita" size="5" value="<?= e(rtrim(rtrim(number_format((float)$r['quantity'], 4, '.', ''), '0'), '.')) ?>">
                 <input form="<?= $fv ?>" name="prezzo" size="7" value="<?= e(number_format((float)$r['last_price_local'], 2, '.', '')) ?>"></td>
@@ -337,6 +341,14 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
             <?php endif; ?></tr>
         <?php endforeach; ?></table></div>
     <?php endif; ?></div>
+    <?php if ($code === 'PORTAFOGLIO_CHATGPT'): ?>
+    <div class="card"><h3>Registra un acquisto deciso con ChatGPT</h3>
+        <form method="post"><input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>"><input type="hidden" name="azione" value="compra"><input type="hidden" name="portafoglio" value="PORTAFOGLIO_CHATGPT">
+        <p>Ticker <input name="ticker" size="8" required> Mercato <select name="mercato"><option value="EU">Italia (EUR)</option><option value="USA">USA (USD)</option></select>
+        Quantità <input name="quantita" size="6" required> Prezzo <input name="prezzo" size="8" required> Stop (prezzo, facoltativo) <input name="stop" size="8"> Cambio EUR per 1 USD (solo USA) <input name="fx" size="6" value="1">
+        <button type="submit">Ho comprato</button></p></form>
+        <p class="muted">Registra solo dopo la tua conferma. Le commissioni e gli avvisi sulle regole (rischio 1%, esposizione 60%, due titoli per settore) sono calcolati dopo la registrazione.</p></div>
+    <?php endif; ?>
     <?php foreach (pf_position_charts($p['portfolio_id']) as $pc): $cid = 'pc' . $pc['id']; $GLOBALS['pf_pcs'][$cid] = $pc; ?>
     <div class="card"><h3><a href="grafico.php?ticker=<?= urlencode($pc['ticker']) ?>"><?= e($pc['ticker']) ?></a> — andamento <?= $pc['open'] ? '(posizione aperta)' : '(chiusa)' ?> <span class="muted">acquisto del <?= e($pc['since']) ?></span></h3>
         <div class="chart-wrap" style="height:280px"><canvas id="<?= $cid ?>"></canvas></div>
