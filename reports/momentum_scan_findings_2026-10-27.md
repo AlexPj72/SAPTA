@@ -182,3 +182,45 @@ The correct next development step, if more evidence is desired, is **data collec
 ## Final safety boundary
 
 All new database work was SELECT-only. No INSERT/UPDATE/DELETE, DDL, schema change, secret change, alert change, portfolio change or production code edit was performed. Test work remains on `test/momentum-scanner-backtest`, separate from `main`, and the draft PR remains unmerged.
+
+
+## Final correction: authoritative rerun with quality-filtered future bars
+
+A final audit found that the earlier threshold-sensitivity and regime tables filtered data quality on the signal bar but did not consistently filter the four future bars used for outcome measurement. Those earlier forward-outcome figures are therefore **exploratory only and must not be used as the decision basis**. I reran the rule grid and the TOD-A outcome cohorts requiring all four future 15m bars to be `ok` or NULL, with no future bar flagged `stale` or `zero_volume`. The cost-classified first-touch simulation also uses quality-filtered future bars.
+
+### Authoritative threshold grid
+
+| Rule | Complete signals | Tickers | Mean close after 1h | Median close after 1h | Positive close | Future high >= +2% | Future low <= -1.5% |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Momentum >=1.0%, volume >=1.0x, near breakout | 282 | 91 | -0.018% | +0.009% | 50.0% | 3.9% | 8.5% |
+| Momentum >=1.0%, volume >=1.5x, near breakout | 200 | 83 | -0.007% | +0.026% | 51.5% | 4.0% | 9.5% |
+| Momentum >=1.5%, volume >=1.0x, near breakout | 174 | 74 | -0.076% | -0.009% | 48.9% | 2.9% | 10.3% |
+| Momentum >=1.5%, volume >=1.5x, near breakout (TOD-A) | 129 | 67 | -0.086% | -0.003% | 49.6% | 3.1% | 11.6% |
+| Momentum >=1.5%, volume >=2.0x, near breakout | 96 | 55 | -0.081% | -0.020% | 49.0% | 3.1% | 13.5% |
+| Momentum >=2.0%, volume >=1.0x, near breakout | 122 | 62 | -0.214% | -0.135% | 43.4% | 2.5% | 13.1% |
+| Momentum >=2.0%, volume >=1.5x, near breakout | 91 | 54 | -0.221% | -0.124% | 46.2% | 2.2% | 14.3% |
+| Momentum >=2.0%, volume >=2.0x, near breakout | 71 | 44 | -0.198% | -0.124% | 45.1% | 1.4% | 16.9% |
+| Momentum >=1.5%, volume >=1.5x, strict breakout | 111 | 64 | -0.124% | -0.036% | 48.6% | 3.6% | 12.6% |
+
+**All nine rule variants have a negative mean one-hour close return before costs** once future-bar quality is enforced. Stronger momentum thresholds degrade the mean and increase downside-tail incidence. The earlier +0.099% TOD-A mean was caused by including lower-quality future bars and is superseded by -0.086%.
+
+### Authoritative TOD-A cohorts
+
+| Subset | Complete signals | Mean close after 1h | Median close after 1h | Positive close | Future high >= +2% | Future low <= -1.5% |
+|---|---:|---:|---:|---:|---:|---:|
+| All | 129 | -0.086% | -0.003% | 49.6% | 3.1% | 11.6% |
+| Excluding 23 October | 127 | -0.084% | +0.021% | 50.4% | 3.1% | 11.8% |
+| Excluding 19 and 23 October | 123 | -0.109% | -0.003% | 49.6% | 3.3% | 12.2% |
+| Opening/session gap >1% | 21 | -0.660% | +0.079% | 57.1% | 4.8% | 23.8% |
+| Intraday gap >1% | 20 | +0.027% | -0.191% | 45.0% | 15.0% | 15.0% |
+| No absolute gap >1% | 88 | +0.025% | -0.020% | 48.9% | 0.0% | 8.0% |
+| Italy (.MI) | 3 | -0.217% | -0.145% | 0.0% | 0.0% | 0.0% |
+| USA/other non-.MI | 126 | -0.083% | +0.026% | 50.8% | 3.2% | 11.9% |
+
+The clean opening-gap subset has a mean return of -0.660% and 23.8% of cases hit a future low at least -1.5%. The intraday-gap subset has only 20 observations, median -0.191%, 45% positive closes and 15% downside-tail incidence. Its 15% future +2% high rate is not sufficient evidence of an edge given the tiny sample, negative median and downside risk.
+
+### Final decision after corrected rerun
+
+The conclusion is stronger than the preliminary one: **no tested threshold variant has positive average one-hour close return before costs on the quality-filtered sample.** The TOD-A first-touch proxy has +0.089% average gross simulated return in the US high-liquidity subset, but the configured round-trip cost floor is 0.20%, resulting in -0.111% mean net before tax. The sample is short, overlapping and regime-limited; no variant should be promoted to operational BUY.
+
+This correction supersedes any earlier positive forward-close statistics in this report where future-bar quality was not enforced. All underlying queries remained SELECT-only; no production files or database state were changed.
