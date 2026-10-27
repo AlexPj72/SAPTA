@@ -1,0 +1,41 @@
+name: SAPTA Momentum Scanner Backtest (read-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_utc:
+        description: "Start timestamp UTC (ISO 8601)"
+        required: true
+        default: "2026-10-13T00:00:00+00:00"
+      end_utc:
+        description: "End timestamp UTC, exclusive (ISO 8601)"
+        required: true
+        default: "2026-10-27T00:00:00+00:00"
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install minimal dependencies
+        run: pip install "pandas==2.2.2" "supabase==2.31.0"
+      - name: Run read-only momentum backtest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BACKTEST_START: ${{ inputs.start_utc }}
+          BACKTEST_END: ${{ inputs.end_utc }}
+        run: python scripts/backtest_momentum_15m.py
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: sapta-momentum-backtest
+          path: momentum-backtest-output/
+          if-no-files-found: error
