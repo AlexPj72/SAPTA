@@ -1,0 +1,21 @@
+name: Movimento forte DRY-RUN (manuale, sola lettura)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  movimento-forte:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install --retries 5 --timeout 60 supabase==2.31.0
+      - name: Modulo Movimento Forte (non scrive su Supabase, non invia ordini)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_movimento_forte.py
