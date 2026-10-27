@@ -1,6 +1,16 @@
 <?php
 require_once 'config.php';
 require_once 'helpers.php';
+session_start();   // stessa sessione di portafoglio.php: il modulo compra/vendi compare solo dopo l'accesso
+if (is_file(__DIR__ . '/config_secret.php')) require_once __DIR__ . '/config_secret.php';
+$gf_logged = !empty($_SESSION['pf_ok']) && !empty($_SESSION['csrf']) && defined('SUPABASE_SERVICE_KEY');
+function gf_pf($table, $params = []) {   // lettura privata con la chiave segreta (solo se l'utente ha fatto l'accesso)
+    $ch = curl_init(SUPABASE_URL . '/rest/v1/' . $table . '?' . http_build_query($params));
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15, CURLOPT_HTTPHEADER => ['apikey: ' . SUPABASE_SERVICE_KEY, 'Authorization: Bearer ' . SUPABASE_SERVICE_KEY]]);
+    $body = curl_exec($ch); $code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+    $r = json_decode((string)$body, true);
+    return ($code === 200 && is_array($r)) ? $r : [];
+}
 
 $ticker = $_GET['ticker'] ?? '';
 if ($ticker === '') {
@@ -148,6 +158,37 @@ $market = market_status($ticker);
 <?php render_nav(''); ?>
 
 <div class="wrap">
+
+<?php
+$gf_cur = (substr($ticker, -3) === '.MI') ? '€' : '$';
+$gf_hold = [];
+if ($gf_logged) {
+    $gf_q = supabase_query('prezzi', ['select' => 'timestamp,close', 'ticker' => 'eq.' . $ticker, 'interval' => 'eq.15m', 'close' => 'gt.0', 'order' => 'timestamp.desc', 'limit' => 1]);
+    $gf_ports = gf_pf('portfolios', ['select' => 'id,code', 'code' => 'in.(PORTAFOGLIO_UTENTE,PORTAFOGLIO_CHATGPT)']);
+    $gf_code = []; foreach ($gf_ports as $gp) $gf_code[(int)$gp['id']] = $gp['code'];
+    foreach (gf_pf('portfolio_positions', ['select' => 'portfolio_id,quantity,avg_cost_local', 'ticker' => 'eq.' . $ticker, 'status' => 'eq.OPEN']) as $gh)
+        if (isset($gf_code[(int)$gh['portfolio_id']])) $gf_hold[$gf_code[(int)$gh['portfolio_id']]] = $gh;
+}
+?>
+<section>
+    <h2>Compra / Vendi <?= e($ticker) ?></h2>
+<?php if (!$gf_logged): ?>
+    <p class="muted">Per comprare o vendere accedi dalla pagina <a href="portafoglio.php">Portafogli</a>, poi torna qui.</p>
+<?php else: ?>
+    <p class="muted">Ultima quotazione utile: <b><?= !empty($gf_q) ? number_format((float)$gf_q[0]['close'], 2, ',', '.') . ' ' . $gf_cur . ' (' . e((new DateTime($gf_q[0]['timestamp'], new DateTimeZone('UTC')))->setTimezone(new DateTimeZone('Europe/Rome'))->format('d/m H:i')) . ')' : 'non disponibile' ?></b>
+        · Utente: <?= isset($gf_hold['PORTAFOGLIO_UTENTE']) ? rtrim(rtrim(number_format((float)$gf_hold['PORTAFOGLIO_UTENTE']['quantity'], 4, ',', ''), '0'), ',') . ' az. a ' . number_format((float)$gf_hold['PORTAFOGLIO_UTENTE']['avg_cost_local'], 2, ',', '.') . ' ' . $gf_cur : 'nessuna posizione' ?>
+        · ChatGPT: <?= isset($gf_hold['PORTAFOGLIO_CHATGPT']) ? rtrim(rtrim(number_format((float)$gf_hold['PORTAFOGLIO_CHATGPT']['quantity'], 4, ',', ''), '0'), ',') . ' az. a ' . number_format((float)$gf_hold['PORTAFOGLIO_CHATGPT']['avg_cost_local'], 2, ',', '.') . ' ' . $gf_cur : 'nessuna posizione' ?></p>
+    <form method="post" action="portafoglio.php">
+        <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>"><input type="hidden" name="ticker" value="<?= e($ticker) ?>">
+        Portafoglio <select name="portafoglio"><option value="PORTAFOGLIO_UTENTE">Utente</option><option value="PORTAFOGLIO_CHATGPT">ChatGPT</option></select>
+        Quantità <input name="quantita" size="6" placeholder="vuota = tutto (vendita)">
+        Prezzo <input name="prezzo" size="8" placeholder="facoltativo">
+        Stop <input name="stop" size="8" placeholder="facoltativo">
+        <button type="submit" name="azione" value="compra">Compra</button> <button type="submit" name="azione" value="vendi">Vendi</button>
+    </form>
+    <p class="muted">Se non indichi il prezzo si usa l'ultima quotazione utile. In vendita, senza quantità si vende tutta la posizione. Lo stop serve solo a calcolare il rischio negli avvisi.</p>
+<?php endif; ?>
+</section>
 
 <?php if ($last_signal): ?>
 <section>

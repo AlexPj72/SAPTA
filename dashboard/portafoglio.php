@@ -137,6 +137,17 @@ function pf_closed_cycles($pid) {   // cicli completati acquisto -> vendita: pre
     }
     return $out;
 }
+function pf_last_quote($ticker) {   // ultima quotazione utile: ultima barra a 15 minuti (altrimenti l'ultima chiusura giornaliera)
+    foreach (['15m', '1d'] as $iv) {
+        $r = pf_query('prezzi', ['select' => 'timestamp,close', 'ticker' => 'eq.' . $ticker, 'interval' => 'eq.' . $iv, 'close' => 'gt.0', 'order' => 'timestamp.desc', 'limit' => 1]);
+        if ($r) return ['price' => (float)$r[0]['close'], 'ts' => $r[0]['timestamp'], 'iv' => $iv];
+    }
+    return null;
+}
+function pf_last_fx() {   // ultimo cambio EUR per 1 USD conosciuto (ultimo ciclo USA)
+    $r = pf_query('trade_lifecycle', ['select' => 'fx_eur_per_local', 'market' => 'eq.USA', 'fx_eur_per_local' => 'gt.0', 'order' => 'created_at.desc', 'limit' => 1]);
+    return $r ? (float)$r[0]['fx_eur_per_local'] : 0.0;
+}
 function pf_rpc($fn, $args) {
     $ch = curl_init(SUPABASE_URL . '/rest/v1/rpc/' . $fn);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_POST => true,
@@ -207,12 +218,26 @@ if ($pw_ok && $logged && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['
         $pre = $pcode === 'PORTAFOGLIO_CHATGPT' ? 'GPT' : 'USER';
         $qty = pf_num($_POST['quantita'] ?? 0); $price = pf_num($_POST['prezzo'] ?? 0);
         $ticker = preg_replace('/[^A-Z0-9.\-]/', '', strtoupper((string)($_POST['ticker'] ?? '')));
-        $market = ($_POST['mercato'] ?? '') === 'EU' ? 'EU' : 'USA';
+        $market = isset($_POST['mercato']) ? (($_POST['mercato'] ?? '') === 'EU' ? 'EU' : 'USA') : (substr($ticker, -3) === '.MI' ? 'EU' : 'USA');
         $cur = $market === 'EU' ? 'EUR' : 'USD';
-        $fx = $market === 'EU' ? 1.0 : pf_num($_POST['fx'] ?? 1);
-        if ($qty <= 0 || $price <= 0 || $fx <= 0 || $ticker === '') { $msg = 'Quantità, prezzo e ticker devono essere validi'; $msg_err = true; }
+        $fx = $market === 'EU' ? 1.0 : pf_num($_POST['fx'] ?? 0);
+        $buy = $_POST['azione'] === 'compra'; $nota = ''; $quote_ts = null;
+        // prezzo facoltativo: se vuoto si usa l'ultima quotazione utile del titolo
+        if ($price <= 0 && $ticker !== '') {
+            $q = pf_last_quote($ticker);
+            if ($q) { $price = $q['price']; $quote_ts = $q['ts']; $nota = ' (ultima quotazione ' . $q['iv'] . ' del ' . (new DateTime($q['ts'], new DateTimeZone('UTC')))->setTimezone(new DateTimeZone('Europe/Rome'))->format('d/m H:i') . ')'; }
+        }
+        if ($fx <= 0 && $market === 'USA') $fx = pf_last_fx();   // cambio facoltativo per i titoli USA
+        // vendita: quantità vuota = tutta la posizione
+        if (!$buy && $qty <= 0 && $ticker !== '') {
+            $pf = pf_query('portfolios', ['select' => 'id', 'code' => 'eq.' . $pcode, 'limit' => 1]);
+            if ($pf) { $po = pf_query('portfolio_positions', ['select' => 'quantity', 'portfolio_id' => 'eq.' . (int)$pf[0]['id'], 'ticker' => 'eq.' . $ticker, 'status' => 'eq.OPEN', 'limit' => 1]); if ($po) $qty = (float)$po[0]['quantity']; }
+        }
+        if ($ticker === '') { $msg = 'Ticker mancante'; $msg_err = true; }
+        elseif ($qty <= 0) { $msg = $buy ? 'Indica la quantità da comprare' : 'Nessuna posizione aperta di ' . $ticker . ' in questo portafoglio'; $msg_err = true; }
+        elseif ($price <= 0) { $msg = 'Nessuna quotazione disponibile per ' . $ticker . ': inserisci il prezzo'; $msg_err = true; }
+        elseif ($fx <= 0) { $msg = 'Cambio EUR/USD non disponibile: inseriscilo'; $msg_err = true; }
         else {
-            $buy = $_POST['azione'] === 'compra';
             $lc = (int)($_POST['lifecycle_id'] ?? 0);
             $fees = pf_fees($market, $qty * $price * $fx);
             [$ok, $out, $code, $err] = pf_rpc('portfolio_execute_trade', [
@@ -222,8 +247,9 @@ if ($pw_ok && $logged && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['
                 'p_market' => $market, 'p_currency' => $cur, 'p_fx_eur_per_local' => $fx, 'p_fees_eur' => $fees,
                 'p_price_reference' => $price, 'p_slippage_pct' => 0, 'p_source_type' => ($buy && $lc) ? 'LIFECYCLE' : 'MANUAL',
                 'p_lifecycle_id' => $lc ?: null]);
-            $msg = $ok ? (($out['duplicate'] ?? false) ? 'Operazione già registrata' : ($buy ? "Acquisto di $ticker registrato" : "Vendita di $ticker registrata")) : ('Operazione rifiutata: ' . $err);
+            $msg = $ok ? (($out['duplicate'] ?? false) ? 'Operazione già registrata' : (($buy ? "Acquisto di $ticker registrato" : "Vendita di $ticker registrata") . ': ' . rtrim(rtrim(number_format($qty, 4, ',', ''), '0'), ',') . ' × ' . number_format($price, 2, ',', '.') . ' ' . ($cur === 'USD' ? '$' : '€') . $nota)) : ('Operazione rifiutata: ' . $err);
             $msg_err = !$ok;
+            if ($ok && $quote_ts) { $stt = pf_price_status($market, $quote_ts); if (strpos($stt, 'NON AGGIORNATO') !== false) $warns[] = 'SOPRA IL LIMITE: prezzo usato ' . $stt; }
             if ($ok && $buy && !($out['duplicate'] ?? false)) { try { $warns = pf_buy_warnings($pcode, $ticker, $qty, $price, $fx, $market, $fees, $lc, pf_num($_POST['stop'] ?? 0)); } catch (Throwable $e) { $warns = []; } }
         }
     }
@@ -299,7 +325,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
             <td><?= number_format((float)$g['invalidation_price'], 2) ?></td><td><?= number_format((float)$g['target_price'], 2) ?></td>
             <td><?= e($g['planned_time_exit_date']) ?></td>
             <td><input form="<?= $fid ?>" name="quantita" size="5" value="<?= e(rtrim(rtrim(number_format((float)$g['quantity'], 4, '.', ''), '0'), '.')) ?>"></td>
-            <td><input form="<?= $fid ?>" name="prezzo" size="7" value="<?= e(number_format((float)$g['entry_fill_price'], 2, '.', '')) ?>"></td>
+            <td><input form="<?= $fid ?>" name="prezzo" size="7" value="" placeholder="ultima quotazione (facoltativo)" title="Facoltativo: se lo lasci vuoto si usa l'ultima quotazione utile"></td>
             <td><button form="<?= $fid ?>" type="submit">Ho comprato</button></td></tr>
         <?php endforeach; ?></table></div>
         <p class="muted">Se hai comprato diversamente dal segnale, correggi quantità e prezzo prima di premere il pulsante.</p>
@@ -336,7 +362,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
                 <input form="<?= $fv ?>" type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>"><input form="<?= $fv ?>" type="hidden" name="azione" value="vendi"><input form="<?= $fv ?>" type="hidden" name="portafoglio" value="<?= e($code) ?>">
                 <input form="<?= $fv ?>" type="hidden" name="ticker" value="<?= e($r['ticker']) ?>"><input form="<?= $fv ?>" type="hidden" name="mercato" value="<?= e($r['market']) ?>"><input form="<?= $fv ?>" type="hidden" name="fx" value="<?= e($r['fx_eur_per_local_used']) ?>">
                 <input form="<?= $fv ?>" name="quantita" size="5" value="<?= e(rtrim(rtrim(number_format((float)$r['quantity'], 4, '.', ''), '0'), '.')) ?>">
-                <input form="<?= $fv ?>" name="prezzo" size="7" value="<?= e(number_format((float)$r['last_price_local'], 2, '.', '')) ?>"></td>
+                <input form="<?= $fv ?>" name="prezzo" size="7" value="" placeholder="ultima quotazione (facoltativo)" title="Facoltativo: se lo lasci vuoto si usa l'ultima quotazione utile"></td>
             <td><button form="<?= $fv ?>" type="submit">Ho venduto</button></td>
             <?php endif; ?></tr>
         <?php endforeach; ?></table></div>
@@ -344,8 +370,7 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <?php if ($code === 'PORTAFOGLIO_CHATGPT'): ?>
     <div class="card"><h3>Registra un acquisto deciso con ChatGPT</h3>
         <form method="post"><input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>"><input type="hidden" name="azione" value="compra"><input type="hidden" name="portafoglio" value="PORTAFOGLIO_CHATGPT">
-        <p>Ticker <input name="ticker" size="8" required> Mercato <select name="mercato"><option value="EU">Italia (EUR)</option><option value="USA">USA (USD)</option></select>
-        Quantità <input name="quantita" size="6" required> Prezzo <input name="prezzo" size="8" required> Stop (prezzo, facoltativo) <input name="stop" size="8"> Cambio EUR per 1 USD (solo USA) <input name="fx" size="6" value="1">
+        <p>Ticker <input name="ticker" size="8" required> Quantità <input name="quantita" size="6" required> Prezzo (facoltativo) <input name="prezzo" size="8" placeholder="ultima quotazione"> Stop (prezzo, facoltativo) <input name="stop" size="8"> Cambio USD (facoltativo) <input name="fx" size="6">
         <button type="submit">Ho comprato</button></p></form>
         <p class="muted">Registra solo dopo la tua conferma. Le commissioni e gli avvisi sulle regole (rischio 1%, esposizione 60%, due titoli per settore) sono calcolati dopo la registrazione.</p></div>
     <?php endif; ?>
