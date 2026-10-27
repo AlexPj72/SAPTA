@@ -64,3 +64,121 @@ The 0.20% cost is a sensitivity assumption, not a verified cost quote for every 
 
 ## Explicit change boundary
 All findings above were computed with read-only `SELECT` queries against existing bars. No INSERT/UPDATE/DELETE, schema changes, secrets changes, or production SAPTA code edits were made. Test assets remain isolated on `test/momentum-scanner-backtest`; nothing was merged to `main`.
+
+
+## Fourth test: threshold sensitivity with data-quality filtering (27 October, SQL SELECT)
+
+This pass uses only bars flagged `ok` (or NULL) and requires a positive volume plus a same-ticker, same-UTC-slot 10-day median volume baseline. The candidate outcomes require four future 15m bars. It is therefore a stricter sample than the earlier exploratory TOD table and cannot be compared 1:1 with it.
+
+| Rule | Signals | Tickers | Mean close after 1h | Median close after 1h | Positive close | Future high >= +2% | Future low <= -1.5% |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Momentum >=1.0%, volume >=1.0x, near breakout | 612 | 115 | +0.063% | +0.074% | 53.8% | 4.1% | 6.0% |
+| Momentum >=1.0%, volume >=1.5x, near breakout | 423 | 112 | +0.082% | +0.091% | 55.1% | 4.0% | 6.6% |
+| Momentum >=1.5%, volume >=1.0x, near breakout | 370 | 105 | +0.084% | +0.128% | 53.8% | 4.1% | 6.8% |
+| Momentum >=1.5%, volume >=1.5x, near breakout (TOD-A) | 271 | 102 | +0.099% | +0.153% | 55.4% | 4.1% | 7.7% |
+| Momentum >=1.5%, volume >=2.0x, near breakout | 200 | 84 | +0.053% | +0.143% | 54.5% | 2.5% | 8.5% |
+| Momentum >=2.0%, volume >=1.0x, near breakout | 248 | 90 | +0.048% | +0.087% | 52.8% | 4.8% | 8.9% |
+| Momentum >=2.0%, volume >=1.5x, near breakout | 183 | 80 | +0.076% | +0.134% | 55.2% | 4.9% | 9.8% |
+| Momentum >=2.0%, volume >=2.0x, near breakout | 138 | 68 | +0.026% | +0.118% | 54.3% | 2.2% | 10.9% |
+| Momentum >=1.5%, volume >=1.5x, strict breakout | 222 | 95 | +0.044% | +0.128% | 54.5% | 3.6% | 9.0% |
+
+Near breakout means close is no more than 0.3% below the previous 8-bar high or above it. Even the best gross mean (+0.099% after one hour) is below the configured round-trip cost floor for USA high-liquidity shares (+0.20%, see cost test below), before taxes or adverse execution.
+
+## Fifth test: regime concentration and gap classification
+
+The TOD-A result is highly dependent on a few dates:
+
+| Sample | Signals | Mean close after 1h | Median close after 1h | Positive close | Future high >= +2% | Future low <= -1.5% |
+|---|---:|---:|---:|---:|---:|---:|
+| All TOD-A signals | 271 | +0.099% | +0.153% | 55.4% | 4.1% | 7.7% |
+| Excluding 23 October | 247 | +0.007% | +0.107% | 52.6% | 1.6% | 8.5% |
+| Excluding both 19 and 23 October | 234 | -0.037% | +0.050% | 50.9% | 1.7% | 9.0% |
+
+The apparent positive average is not stable across dates. The strong 23 October session materially lifts the aggregate; removing it reduces the mean to almost zero. This is a major overfitting/regime-dependence warning.
+
+A separate gap check distinguished an opening/session gap (more than 30 minutes since the prior bar) from an intraday gap (30 minutes or less):
+
+| TOD-A subset | Signals | Mean close after 1h | Positive close | Future high >= +2% | Future low <= -1.5% |
+|---|---:|---:|---:|---:|---:|
+| Opening/session gap >1% | 24 | -0.463% | 58.3% | 4.2% | 20.8% |
+| Intraday gap >1% | 37 | +0.249% | 54.1% | 13.5% | 10.8% |
+| No absolute gap >1% | 210 | +0.136% | 55.2% | 2.4% | 5.7% |
+
+The opening-gap subset has a materially worse average and more downside tails. The intraday-gap subset is more promising on gross high excursion, but it has only 37 observations, overlapping signals and no evidence yet of a robust net edge. It is not approved for deployment.
+
+## Sixth test: market split and non-overlapping signals
+
+With data-quality filtering, four complete future bars and the same TOD-A rule, the market split was:
+
+| Market | Signals | Tickers | Mean close after 1h | Median close after 1h | Positive close | Future high >= +2% | Future low <= -1.5% |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Italy (.MI) | 43 | 15 | +0.196% | +0.340% | 58.1% | 0.0% | 4.7% |
+| USA/other non-.MI | 228 | 87 | +0.080% | +0.128% | 54.8% | 4.8% | 8.3% |
+
+The Italian subset is small and generated no +2% future highs in this sample. The US/other subset has higher tail upside but a negative result after configured round-trip costs below.
+
+Using a conservative non-overlap screen (reject a signal if another signal for the same ticker occurred in the previous hour), the 129 complete, data-quality-filtered trades fell to 94. Their average close return was -0.139%, median -0.020%, positive closes 48.9%, future high >= +2% 3.2%, and future low <= -1.5% 10.6%. A conservative first-touch +1.0% target / -0.75% stop proxy had mean gross return +0.038%; subtracting round-trip cost sensitivities gives:
+- cost 0.10%: -0.062%;
+- cost 0.15%: -0.112%;
+- cost 0.20%: -0.162%;
+- cost 0.30%: -0.262%.
+
+The non-overlap screen is conservative rather than a full portfolio scheduler: it rejects signals based on any earlier signal in the preceding hour, even if that earlier signal would itself have been rejected. This avoids overstating trade count, but a final portfolio-level simulation would need a true sequential execution ledger.
+
+## Seventh test: configured SAPTA costs applied to simulated trades
+
+I read the active `public.costi_operazione` rows (SELECT only) and the cost calculation in `src/modulo_e_cost_filter.py` on `main`; neither was changed. The database currently configures:
+
+- **Alpaca / USA:** variable commission 0%; spread assumption 0.05%; fixed commission €0; plus per-side slippage assumption by liquidity: 0.05% high, 0.15% medium, 0.40% low.
+- **Interactive Brokers / EU:** fixed commission €1 per operation; variable commission 0.05%; spread assumption 0.10%; plus the same per-side slippage tiers.
+- Both rows use a 26% capital-gains tax reserve, applied by SAPTA only when expected net return is positive.
+
+These are the values currently configured in SAPTA, **not independently verified broker quotes**. For a round trip (entry + exit), before tax, they imply approximately:
+
+| Market / liquidity | €160 position | €260 position |
+|---|---:|---:|
+| USA high | 0.20% | 0.20% |
+| USA medium | 0.40% | 0.40% |
+| USA low / unknown | 0.90% | 0.90% |
+| EU high | 1.65% | 1.17% |
+| EU medium | 1.85% | 1.37% |
+| EU low / unknown | 2.35% | 1.87% |
+
+The EU estimates include €1 fixed fee on both entry and exit, plus variable commission, spread and slippage on both sides. They are sensitive to actual order size and fill conditions.
+
+I then applied those configured costs to the data-quality-filtered TOD-A trades with a 1-hour first-touch proxy (target +1.0%, stop -0.75%; stop assumed first if both are crossed in the same 15m bar). The subset with complete outcomes contained 126 USA signals and only 3 EU signals with known high-liquidity metadata:
+
+| Market | Position notional used | Signals | Mean gross simulated return | Mean round-trip cost | Mean net before tax |
+|---|---:|---:|---:|---:|---:|
+| USA high-liquidity metadata | €160 | 126 | +0.089% | 0.200% | -0.111% |
+| USA high-liquidity metadata | €260 | 126 | +0.089% | 0.200% | -0.111% |
+| EU high-liquidity metadata | €160 | 3 | -0.419% | 1.650% | -2.069% |
+| EU high-liquidity metadata | €260 | 3 | -0.419% | 1.169% | -1.588% |
+
+The EU sample is far too small for inference, but the configured fixed fee makes small positions structurally expensive. For USA, the average gross simulated result is less than half the configured round-trip cost floor. The strategy therefore fails the cost test even under the high-liquidity assumption, before tax. Medium/low liquidity assumptions make the result worse.
+
+Important implementation finding: `calculate_operation_cost()` in the current cost filter calculates one operation's cost. The backtest's round-trip calculation above doubles per-side commission/spread/slippage for entry plus exit. This test does not change the production module; it flags that any strategy evaluation must model both sides consistently.
+
+## Eighth test: data coverage and quality
+
+Read-only database inventory for 1–26 October:
+- 30,526 intraday 15m rows across 136 tickers; actual 15m history starts 13 October and ends 26 October 19:45 UTC.
+- Of 30,526 rows, 19,350 (63.4%) are flagged `ok`, 7,557 (24.8%) `zero_volume`, and 3,619 (11.9%) `stale`.
+- Daily data exists for 134 tickers, from 1 October through 23 October, but daily data cannot replace missing intraday bars for this test.
+- There are only about two weeks of intraday observations; the 10-day time-of-day baseline consequently has very few historical samples for some slots.
+- The SQL test filters out stale and zero-volume bars for signal creation and future outcomes. The original Python helper still needs a separate code-level validation before it can be treated as the canonical reproducer; its data-quality handling and its rolling-volume baseline do not exactly match the SQL TOD-A experiment.
+
+## Final conclusion
+
+**Do not activate this momentum scanner as an operational BUY rule and do not modify SAPTA's live BUY logic on the basis of these tests.** The most promising gross filter is momentum >=1.5%, near-breakout, same-time-of-day volume >=1.5x median, but:
+1. Mean forward close return is only +0.099% gross and collapses to +0.007% when 23 October is excluded.
+2. The conservative non-overlap sample has mean close return -0.139% and only 48.9% positive closes.
+3. The first-touch stop/target proxy averages +0.089% gross for the cost-classified US sample, below the configured 0.20% high-liquidity round-trip floor; net average is -0.111% before tax.
+4. Configured EU round-trip costs are approximately 1.17–2.35% at €160–€260 notional, so the strategy cannot plausibly overcome them at the observed one-hour return scale.
+5. The 15m history is too short and quality flags exclude 36.6% of bars. A handful of strong dates dominates the apparent edge.
+
+The correct next development step, if more evidence is desired, is **data collection and out-of-sample paper evaluation**, not a live-rule change: preserve timestamped candidate signals, simulate sequential fills with both-side costs and gap/slippage rules, and evaluate on several months of complete intraday history. Until that evidence exists, this branch is diagnostic only.
+
+## Final safety boundary
+
+All new database work was SELECT-only. No INSERT/UPDATE/DELETE, DDL, schema change, secret change, alert change, portfolio change or production code edit was performed. Test work remains on `test/momentum-scanner-backtest`, separate from `main`, and the draft PR remains unmerged.
