@@ -1,6 +1,7 @@
 <?php
 require_once 'config.php';
 require_once 'helpers.php';
+require_once 'pf_levels.php';
 session_start();
 
 // Lettura/scrittura PRIVATE: usa la chiave segreta e la password presenti solo sul server (config_secret.php, mai su GitHub).
@@ -90,10 +91,11 @@ function pf_position_charts($pid) {   // dati per i grafici delle sole posizioni
             if ($buy < 0 && $ts >= $t0->getTimestamp()) $buy = $i;
             if ($t1 && $ts <= $t1->getTimestamp()) $sell = $i;
         }
+        $lvl = ($lc && $lc['target_price'] !== null && $lc['invalidation_price'] !== null) ? null : pf_exit_levels($r['ticker'], (float)$r['avg_cost_local'], $r['opened_at']);
         $out[] = ['id' => (int)$r['id'], 'ticker' => $r['ticker'], 'open' => $r['status'] === 'OPEN', 'labels' => $labels, 'values' => $vals,
             'entry' => round((float)$r['avg_cost_local'] * $fx, 2), 'qty' => (float)$r['quantity'] * $fx,
-            'target' => ($lc && $lc['target_price'] !== null) ? round((float)$lc['target_price'] * $fx, 2) : null,
-            'stop' => ($lc && $lc['invalidation_price'] !== null) ? round((float)$lc['invalidation_price'] * $fx, 2) : null,
+            'target' => ($lc && $lc['target_price'] !== null) ? round((float)$lc['target_price'] * $fx, 2) : ($lvl ? round($lvl['target'] * $fx, 2) : null),
+            'stop' => ($lc && $lc['invalidation_price'] !== null) ? round((float)$lc['invalidation_price'] * $fx, 2) : ($lvl ? round($lvl['stop'] * $fx, 2) : null),
             'buyIdx' => $buy, 'sellIdx' => $t1 ? $sell : -1, 'since' => (clone $t0)->setTimezone($tz)->format('d/m/Y H:i')];
     }
     return $out;
@@ -148,6 +150,31 @@ function pf_last_fx() {   // ultimo cambio EUR per 1 USD conosciuto (ultimo cicl
     $r = pf_query('trade_lifecycle', ['select' => 'fx_eur_per_local', 'market' => 'eq.USA', 'fx_eur_per_local' => 'gt.0', 'order' => 'created_at.desc', 'limit' => 1]);
     return $r ? (float)$r[0]['fx_eur_per_local'] : 0.0;
 }
+function pf_levels_map($pid) {   // livelli di uscita delle posizioni aperte: dal segnale SAPTA se c'e', altrimenti calcolati in automatico (ATR)
+    $out = [];
+    $ps = pf_query('portfolio_positions', ['select' => 'ticker,avg_cost_local,opened_at,lifecycle_id', 'portfolio_id' => 'eq.' . (int)$pid, 'status' => 'eq.OPEN']);
+    foreach ($ps as $r) {
+        $stop = $target = null; $src = 'ATR';
+        if (!empty($r['lifecycle_id'])) {
+            $l = pf_query('trade_lifecycle', ['select' => 'target_price,invalidation_price', 'id' => 'eq.' . (int)$r['lifecycle_id'], 'limit' => 1]);
+            if ($l && $l[0]['target_price'] !== null && $l[0]['invalidation_price'] !== null) { $stop = (float)$l[0]['invalidation_price']; $target = (float)$l[0]['target_price']; $src = 'segnale'; }
+        }
+        if ($stop === null) { $lv = pf_exit_levels($r['ticker'], (float)$r['avg_cost_local'], $r['opened_at']); if ($lv) { $stop = $lv['stop']; $target = $lv['target']; } }
+        if ($stop !== null) $out[$r['ticker']] = ['stop' => $stop, 'target' => $target, 'src' => $src];
+    }
+    return $out;
+}
+function pf_levels_cell($lv, $r) {
+    $l = $lv[$r['ticker']] ?? null;
+    if (!$l) return 'n.d.';
+    $cs = $r['market'] === 'EU' ? '€' : '$';
+    $f = function ($v) use ($cs) { return number_format($v, 2, ',', '.') . ' ' . $cs; };
+    $txt = '🛑 ' . $f($l['stop']) . ' · 🎯 ' . $f($l['target']) . ($l['src'] === 'segnale' ? ' (segnale)' : ' (automatici)');
+    $px = (float)($r['last_price_local'] ?? 0);
+    if ($px > 0 && $px <= $l['stop']) $txt .= ' ⚠️ SOTTO LO STOP';
+    elseif ($px > 0 && $l['target'] !== null && $px >= $l['target']) $txt .= ' ⚠️ TARGET RAGGIUNTO';
+    return $txt;
+}
 function pf_rpc($fn, $args) {
     $ch = curl_init(SUPABASE_URL . '/rest/v1/rpc/' . $fn);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_POST => true,
@@ -176,6 +203,12 @@ function pf_buy_warnings($pcode, $ticker, $qty, $price, $fx, $market, $fees, $lc
     $stop = null;
     if ($lc) { $l = pf_query('trade_lifecycle', ['select' => 'invalidation_price', 'id' => 'eq.' . (int)$lc, 'limit' => 1]); $stop = $l[0]['invalidation_price'] ?? null; }
     if ($stop === null && $stop_in > 0) $stop = $stop_in;
+    $lvl = pf_exit_levels($ticker, $price, gmdate('c'));   // uscita automatica (ATR) se non c'e' lo stop del segnale
+    if ($lvl) {
+        $cs = $market === 'EU' ? '€' : '$';
+        array_unshift($w, 'Uscita calcolata in automatico: stop (minimo) ' . number_format($stop === null ? $lvl['stop'] : (float)$stop, 2, ',', '.') . ' ' . $cs . ', target (massimo) ' . number_format($lvl['target'], 2, ',', '.') . ' ' . $cs . ' (1,5 e 3 volte l\'ATR a 14 giorni, pari a ' . number_format($lvl['atr'], 2, ',', '.') . ' ' . $cs . ')');
+        if ($stop === null) $stop = $lvl['stop'];
+    }
     if ($stop === null) $w[] = 'nessuno stop associato: rischio dell\'operazione non calcolabile';
     else {
         $rischio = $qty * ($price - (float)$stop) * $fx + $fees + pf_fees($market, $qty * (float)$stop * $fx);
@@ -350,12 +383,14 @@ $sum = ($pw_ok && $logged) ? pf_query('v_portfolio_summary', ['select' => '*', '
     <div class="card"><h3>Curva del capitale</h3><?= pf_curve($snap, $init) ?></div>
     <div class="card"><h3>Posizioni aperte (<?= count($pos) ?>)</h3>
     <?php if (!$pos): ?><p class="muted">Nessuna posizione aperta.</p><?php else: ?>
-        <div class="tw"><table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo (ora italiana)</th><?php if (in_array($code, PF_OPERABILI, true)): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
+        <?php $lv = pf_levels_map($p['portfolio_id']); ?>
+        <div class="tw"><table><tr><th>Ticker</th><th>Quantità</th><th>Costo</th><th>Valore</th><th>Risultato</th><th>Prezzo (ora italiana)</th><th>Stop · Target</th><?php if (in_array($code, PF_OPERABILI, true)): ?><th>Vendita: quantità · prezzo</th><th></th><?php endif; ?></tr>
         <?php foreach ($pos as $r): $mk[$r['market']] = true; ?>
             <tr><td><a href="grafico.php?ticker=<?= urlencode($r['ticker']) ?>"><b><?= e($r['ticker']) ?></b></a></td><td><?= e(rtrim(rtrim(number_format((float)$r['quantity'], 4, '.', ''), '0'), '.')) ?></td>
             <td><?= fmt_eur($r['cost_basis_eur']) ?></td><td><?= fmt_eur($r['market_value_eur']) ?></td>
             <td><?= $r['unrealized_pnl_pct'] === null ? 'n.d.' : number_format((float)$r['unrealized_pnl_pct'], 2) . '%' ?></td>
             <td><?= e(pf_price_status($r['market'], $r['price_as_of'])) ?></td>
+            <td><?= e(pf_levels_cell($lv, $r)) ?></td>
             <?php if (in_array($code, PF_OPERABILI, true)): ?>
             <?php $fv = 'fv' . (int)$r['position_id']; ?>
             <td><form id="<?= $fv ?>" method="post"></form>

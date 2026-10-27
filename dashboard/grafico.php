@@ -1,6 +1,7 @@
 <?php
 require_once 'config.php';
 require_once 'helpers.php';
+require_once 'pf_levels.php';
 session_start();   // stessa sessione di portafoglio.php: il modulo compra/vendi compare solo dopo l'accesso
 if (is_file(__DIR__ . '/config_secret.php')) require_once __DIR__ . '/config_secret.php';
 $gf_logged = !empty($_SESSION['pf_ok']) && !empty($_SESSION['csrf']) && defined('SUPABASE_SERVICE_KEY');
@@ -84,6 +85,17 @@ if ($pos && $pos['quantity'] !== null) {
     $pos_js = ['entry' => (float) $pos['entry_fill_price'], 'qty' => (float) $pos['quantity'], 'fx' => (float) ($pos['fx_eur_per_local'] ?? 1)];
 } else {
     $pos_js = null;
+    // acquisto manuale senza segnale: entrata dalla posizione del portafoglio e livelli di uscita calcolati in automatico (solo se hai fatto l'accesso)
+    if ($gf_logged) {
+        $hp = gf_pf('portfolio_positions', ['select' => 'quantity,avg_cost_local,opened_at', 'ticker' => 'eq.' . $ticker, 'status' => 'eq.OPEN', 'order' => 'opened_at.desc', 'limit' => 1]);
+        if ($hp) {
+            $fxh = 1.0;
+            if (substr($ticker, -3) !== '.MI') { $fr = gf_pf('trade_lifecycle', ['select' => 'fx_eur_per_local', 'market' => 'eq.USA', 'fx_eur_per_local' => 'gt.0', 'order' => 'created_at.desc', 'limit' => 1]); $fxh = $fr ? (float)$fr[0]['fx_eur_per_local'] : 1.0; }
+            $pos_js = ['entry' => (float)$hp[0]['avg_cost_local'], 'qty' => (float)$hp[0]['quantity'], 'fx' => $fxh];
+            $lvh = pf_exit_levels($ticker, (float)$hp[0]['avg_cost_local'], $hp[0]['opened_at']);
+            if ($lvh) { $target_price = $lvh['target']; $invalidation_price = $lvh['stop']; }
+        }
+    }
 }
 
 // Statistiche rapide
