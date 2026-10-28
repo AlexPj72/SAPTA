@@ -1,0 +1,179 @@
+name: Diagnostica confronto Modulo B e regole di momentum (sola lettura)
+
+# Solo manuale. Nessun segreto, nessuna scrittura su database o repository.
+# Confronta il punteggio di Modulo B con quattro regole di momentum/breakout sullo storico Yahoo dal 2019.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  momentum:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+      - name: Installa dipendenze (stesse versioni di Slow)
+        run: pip install --retries 5 --timeout 60 "yfinance>=1.7.0" pandas==2.2.2 numpy==2.0.2 pandas-ta-classic==0.8.32
+      - name: Confronto regole
+        run: |
+          python - <<'PY'
+          import warnings, time
+          warnings.filterwarnings("ignore")
+          import numpy as np, pandas as pd
+          import pandas_ta_classic as ta
+
+          T = "A2A.MI,AAPL,ABBV,ABNB,ABT,ADBE,ADI,AMAT,AMD,AMGN,AMP.MI,AMZN,AVGO,AVIO.MI,AXP,BA,BAC,BAMI.MI,BC.MI,BKNG,BLK,BMED.MI,BMPS.MI,BMY,BPE.MI,BRK-B,C,CAT,CMCSA,CME,COIN,COP,COST,CPR.MI,CRM,CRWD,CSCO,CVX,DE,DHR,DIA.MI,DIS,DUK,ENEL.MI,ENI.MI,EOG,ERG.MI,FDX,G.MI,GE,GILD,GOOG,GOOGL,GS,HD,HER.MI,HON,IBM,ICE,IG.MI,INTC,INTU,INW.MI,IP.MI,IRE.MI,ISP.MI,ISRG,IVG.MI,JNJ,JPM,JUVE.MI,KO,LDO.MI,LLY,LMT,LOW,MA,MAR,MB.MI,MCD,MCO,MDT,MELI,META,MO,MONC.MI,MRK,MS,MSFT,MU,NEE,NFLX,NKE,NOW,NVDA,ORCL,PANW,PEP,PFE,PG,PLTR,PM,PRY.MI,PST.MI,PYPL,QCOM,RACE.MI,REC.MI,RTX,SBUX,SHOP,SLB,SNOW,SO,SOL.MI,SPGI,SRG.MI,STLAM.MI,STMMI.MI,T,TIT.MI,TMO,TRN.MI,TSLA,TXN,UBER,UCG.MI,UNP,UPS,V,VZ,WFC,WMT,XOM".split(",")
+          RULES = ["B0", "B1", "R1", "R2", "R3", "R4"]
+          NAMES = {"B0": "Modulo B (contesto 0, tecnico>=2)", "B1": "Modulo B (contesto +1, tecnico>=1)", "R1": "1 Breakout 20 sedute",
+                   "R2": "2 Momentum (+3% in 3 o +5% in 5)", "R3": "3 Breakout + volume 1,5x", "R4": "4 Combinata (breakout o accelerazione, volume se disponibile)"}
+
+
+          def fetch(tickers):
+              import yfinance as yf
+              out = {}
+              for i in range(0, len(tickers), 20):
+                  b = tickers[i:i + 20]
+                  try:
+                      df = yf.download(b, start="2019-06-01", interval="1d", auto_adjust=True, group_by="ticker", progress=False)
+                  except Exception:
+                      df = None
+                  for t in b:
+                      try:
+                          out[t] = df[t].dropna(subset=["Close"]).copy()
+                      except Exception:
+                          pass
+                  time.sleep(3)
+              return out
+
+
+          def flags_for(d):
+              d = d.sort_index()[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Open", "High", "Low", "Close"])
+              d = d[(d[["Open", "High", "Low", "Close"]] > 0).all(axis=1)]
+              d["Volume"] = d["Volume"].fillna(0)
+              n = len(d)
+              if n < 120:
+                  return None
+              c = d["Close"]
+              rsi, macd, bb = ta.rsi(c, length=14), ta.macd(c), ta.bbands(c, length=20)
+              if rsi is None or macd is None or bb is None:
+                  return None
+              m = macd.filter(regex=r"^MACD_").iloc[:, 0]; ms = macd.filter(regex=r"^MACDs_").iloc[:, 0]
+              bl = bb.filter(regex=r"^BBL_").iloc[:, 0]; bu = bb.filter(regex=r"^BBU_").iloc[:, 0]
+              bp = (c - bl) / (bu - bl)
+              okb = (rsi.notna() & m.notna() & ms.notna() & bp.notna() & (bu > bl)).values
+              tech = (np.where(rsi < 30, 2, np.where(rsi > 70, -2, 0)) + np.where(m > ms, 1, -1) + np.where(bp < 0.2, 1, np.where(bp > 0.8, -1, 0)))
+              hh20 = d["High"].rolling(20).max().shift(1)
+              vavg = d["Volume"].rolling(20).mean().shift(1)
+              brk = (c > hh20).values & hh20.notna().values
+              mom = (((c / c.shift(3) - 1) >= 0.03) | ((c / c.shift(5) - 1) >= 0.05)).values & c.shift(5).notna().values
+              volok = (d["Volume"] >= 1.5 * vavg).values & (vavg > 0).values
+              voldata = ((vavg > 0).values & (d["Volume"] > 0).values)
+              f = {"B0": okb & (tech >= 2), "B1": okb & (tech >= 1), "R1": brk, "R2": mom, "R3": brk & volok,
+                   "R4": (brk | mom) & (volok | ~voldata)}
+              return d, f
+
+
+          def analyse(t, d, f):
+              n = len(d); o, h, l, c = (d[k].values for k in ("Open", "High", "Low", "Close"))
+              cost = 1.4 if t.endswith(".MI") else 0.1; mk = "Italia" if t.endswith(".MI") else "USA"; yrs = d.index.year.values
+              rows = []
+              for k in range(25, n - 10):
+                  e = o[k + 1]
+                  rows.append((t, mk, yrs[k], cost, *(f[r][k] for r in RULES),
+                               *((c[k + x] / e - 1) * 100 - cost for x in (1, 3, 5, 10)), (l[k + 1:k + 11].min() / e - 1) * 100))
+              fr = pd.DataFrame(rows, columns=["t", "mk", "year", "cost"] + RULES + ["n1", "n3", "n5", "n10", "mae"])
+              ev = {"r15": [], "d5": [], "d10": []}
+              last = -99
+              for E in range(25, n):
+                  kinds = []
+                  if c[E] / c[E - 4] - 1 >= 0.15 and E - last > 4:
+                      kinds.append("r15"); last = E
+                  if c[E] / c[E - 1] - 1 >= 0.05: kinds.append("d5")
+                  if c[E] / c[E - 1] - 1 >= 0.10: kinds.append("d10")
+                  for kd in kinds:
+                      rec = {"mk": mk, "year": yrs[E]}
+                      for r in RULES:
+                          fl = f[r]
+                          rec[r] = (bool(fl[E - 1]), bool(fl[E - 2:E].any()), bool(fl[E - 4:E].any()))
+                          if kd == "r15":
+                              s = next((j for j in range(E - 4, E) if fl[j]), None)
+                              if s is not None:
+                                  tot = c[E] / c[E - 4] - 1
+                                  rec[r + "_dd"] = E - s
+                                  rec[r + "_prog"] = (c[s] / c[E - 4] - 1) / tot * 100
+                                  rec[r + "_res"] = (c[E] / o[s + 1] - 1) * 100 - cost
+                      ev[kd].append(rec)
+              return fr, ev
+
+
+          def pct(x): return f"{100*x:.1f}%"
+
+
+          def main(data):
+              frs, ev = [], {"r15": [], "d5": [], "d10": []}
+              for t, d in data.items():
+                  x = flags_for(d)
+                  if x is None: continue
+                  fr, e = analyse(t, *x)
+                  frs.append(fr)
+                  for k in ev: ev[k] += e[k]
+              fr = pd.concat(frs, ignore_index=True)
+              out = []
+              # 1) panoramica
+              m1 = [f"TITOLI {len(frs)} | giorni-titolo {len(fr)} | rialzi >=15% in 4 sedute (distinti) {len(ev['r15'])} | rialzi giornalieri >=5% {len(ev['d5'])} | >=10% {len(ev['d10'])}",
+                    "quota di giorni con segnale: " + " | ".join(f"{r} {pct(fr[r].mean())}" for r in RULES)]
+              out.append(m1)
+              # 2) intercettazione
+              m2 = []
+              for kd, lab in (("r15", "RIALZI >=15% IN 4 SEDUTE"), ("d10", "RIALZI GIORNALIERI >=10%"), ("d5", "RIALZI GIORNALIERI >=5%")):
+                  m2.append(f"--- {lab} (n={len(ev[kd])}): segnale il giorno prima / entro 2 giorni / entro 4 giorni ---")
+                  for r in RULES:
+                      a = [e[r] for e in ev[kd]]
+                      m2.append(f"{NAMES[r]}: {pct(np.mean([x[0] for x in a]))} / {pct(np.mean([x[1] for x in a]))} / {pct(np.mean([x[2] for x in a]))}")
+                  if kd == "r15":
+                      for r in RULES:
+                          dd = [e[r + "_dd"] for e in ev[kd] if r + "_dd" in e]
+                          if dd:
+                              pg = [e[r + "_prog"] for e in ev[kd] if r + "_prog" in e]; rs = [e[r + "_res"] for e in ev[kd] if r + "_res" in e]
+                              m2.append(f"   primo segnale ({r}): in media {np.mean(dd):.1f} sedute prima; gia' avvenuto il {np.median(pg):.0f}% del rialzo (mediana); residuo netto fino alla fine {np.mean(rs):+.2f}% (mediana {np.median(rs):+.2f}%)")
+              out.append(m2)
+              # 3) rendimenti, falsi segnali, escursione avversa
+              m3 = ["--- rendimento netto dopo ingresso all'apertura successiva (n segnali; r1 r3 r5 r10; vincenti a 5 e 10 sedute; falsi = perdita a 5 sedute; MAE10 medio e quota con MAE <= -5%) ---",
+                    f"TUTTI I GIORNI: r1 {fr['n1'].mean():+.2f} r3 {fr['n3'].mean():+.2f} r5 {fr['n5'].mean():+.2f} r10 {fr['n10'].mean():+.2f}"]
+              for r in RULES:
+                  g = fr[fr[r]]
+                  if len(g) == 0: continue
+                  m3.append(f"{NAMES[r]}: n={len(g)} | {g['n1'].mean():+.2f} {g['n3'].mean():+.2f} {g['n5'].mean():+.2f} {g['n10'].mean():+.2f} | vincenti {pct((g['n5']>0).mean())} / {pct((g['n10']>0).mean())} | falsi {pct((g['n5']<0).mean())} | MAE {g['mae'].mean():.1f}% ({pct((g['mae']<=-5).mean())}) | peggiore r10 {g['n10'].min():+.1f}%")
+              out.append(m3)
+              # 4) Italia/USA e periodo
+              m4 = ["--- per mercato e periodo: n | netto r5 | netto r10 ---"]
+              for lab, mask in (("Italia", fr["mk"] == "Italia"), ("USA", fr["mk"] == "USA"), ("2019-2024", fr["year"] <= 2024), ("2025-2026 (periodo finale)", fr["year"] >= 2025)):
+                  sub = fr[mask]
+                  m4.append(f"[{lab}] base n={len(sub)} r5 {sub['n5'].mean():+.2f} r10 {sub['n10'].mean():+.2f}")
+                  for r in RULES:
+                      g = sub[sub[r]]
+                      if len(g): m4.append(f"   {r}: n={len(g)} | {g['n5'].mean():+.2f} | {g['n10'].mean():+.2f}")
+              for mk in ("Italia", "USA"):
+                  a = [e for e in ev["r15"] if e["mk"] == mk]
+                  if a: m4.append(f"rialzi >=15% in 4 sedute {mk} (n={len(a)}) intercettati entro 4 giorni: " + " | ".join(f"{r} {pct(np.mean([e[r][2] for e in a]))}" for r in RULES))
+              a = [e for e in ev["r15"] if e["year"] >= 2025]
+              if a: m4.append(f"rialzi >=15% in 4 sedute 2025-2026 (n={len(a)}) intercettati entro 4 giorni: " + " | ".join(f"{r} {pct(np.mean([e[r][2] for e in a]))}" for r in RULES))
+              out.append(m4)
+              # 5) anno per anno
+              m5 = ["--- anno per anno: netto a 5 sedute (n segnali) ---"]
+              for y in sorted(fr["year"].unique()):
+                  sub = fr[fr["year"] == y]
+                  m5.append(f"{y}: base {sub['n5'].mean():+.2f} | " + " | ".join(f"{r} {sub[sub[r]]['n5'].mean():+.2f} ({int(sub[r].sum())})" for r in RULES))
+              out.append(m5)
+              for i, m in enumerate(out, 1):
+                  print("\n".join(m))
+                  print(f"::notice title=momentum {i}::" + "%0A".join(m))
+
+
+          if __name__ == "__main__":
+              main(fetch(T))
+          PY
