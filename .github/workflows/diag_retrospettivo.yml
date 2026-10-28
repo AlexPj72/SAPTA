@@ -1,0 +1,150 @@
+name: Diagnostica retrospettivo punteggio SAPTA (sola lettura)
+
+# Solo manuale. Nessun segreto, nessuna scrittura su database o repository.
+# Applica alle barre giornaliere di Yahoo (dal 2019) la stessa regola di punteggio di Modulo B
+# (RSI, MACD, bande di Bollinger) e misura capacita' predittiva e rialzi mancati.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retro:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+      - name: Installa dipendenze (stesse versioni di Slow)
+        run: pip install --retries 5 --timeout 60 "yfinance>=1.7.0" pandas==2.2.2 numpy==2.0.2 pandas-ta-classic==0.8.32
+      - name: Retrospettivo
+        run: |
+          python - <<'PY'
+          import warnings, time, sys
+          warnings.filterwarnings("ignore")
+          import numpy as np, pandas as pd
+          import pandas_ta_classic as ta
+
+          T = "A2A.MI,AAPL,ABBV,ABNB,ABT,ADBE,ADI,AMAT,AMD,AMGN,AMP.MI,AMZN,AVGO,AVIO.MI,AXP,BA,BAC,BAMI.MI,BC.MI,BKNG,BLK,BMED.MI,BMPS.MI,BMY,BPE.MI,BRK-B,C,CAT,CMCSA,CME,COIN,COP,COST,CPR.MI,CRM,CRWD,CSCO,CVX,DE,DHR,DIA.MI,DIS,DUK,ENEL.MI,ENI.MI,EOG,ERG.MI,FDX,G.MI,GE,GILD,GOOG,GOOGL,GS,HD,HER.MI,HON,IBM,ICE,IG.MI,INTC,INTU,INW.MI,IP.MI,IRE.MI,ISP.MI,ISRG,IVG.MI,JNJ,JPM,JUVE.MI,KO,LDO.MI,LLY,LMT,LOW,MA,MAR,MB.MI,MCD,MCO,MDT,MELI,META,MO,MONC.MI,MRK,MS,MSFT,MU,NEE,NFLX,NKE,NOW,NVDA,ORCL,PANW,PEP,PFE,PG,PLTR,PM,PRY.MI,PST.MI,PYPL,QCOM,RACE.MI,REC.MI,RTX,SBUX,SHOP,SLB,SNOW,SO,SOL.MI,SPGI,SRG.MI,STLAM.MI,STMMI.MI,T,TIT.MI,TMO,TRN.MI,TSLA,TXN,UBER,UCG.MI,UNP,UPS,V,VZ,WFC,WMT,XOM".split(",")
+
+
+          def fetch(tickers):
+              import yfinance as yf
+              out = {}
+              for i in range(0, len(tickers), 20):
+                  b = tickers[i:i + 20]
+                  try:
+                      df = yf.download(b, start="2019-06-01", interval="1d", auto_adjust=True, group_by="ticker", progress=False)
+                  except Exception:
+                      df = None
+                  for t in b:
+                      try:
+                          d = df[t].dropna(subset=["Close"]).copy()
+                          out[t] = d
+                      except Exception:
+                          pass
+                  time.sleep(3)
+              return out
+
+
+          def per_ticker(t, d):
+              d = d.sort_index()[["Open", "High", "Low", "Close"]].dropna()
+              d = d[(d > 0).all(axis=1)]
+              n = len(d)
+              if n < 100:
+                  return None
+              c = d["Close"]
+              rsi = ta.rsi(c, length=14)
+              macd = ta.macd(c)
+              bb = ta.bbands(c, length=20)
+              if rsi is None or macd is None or bb is None:
+                  return None
+              m = macd.filter(regex=r"^MACD_").iloc[:, 0]
+              ms = macd.filter(regex=r"^MACDs_").iloc[:, 0]
+              bl = bb.filter(regex=r"^BBL_").iloc[:, 0]
+              bu = bb.filter(regex=r"^BBU_").iloc[:, 0]
+              bp = (c - bl) / (bu - bl)
+              valid = (rsi.notna() & m.notna() & ms.notna() & bp.notna() & (bu > bl)).values
+              srsi = np.where(rsi < 30, 2, np.where(rsi > 70, -2, 0))
+              smacd = np.where(m > ms, 1, -1)
+              sbb = np.where(bp < 0.2, 1, np.where(bp > 0.8, -1, 0))
+              tech = (srsi + smacd + sbb).astype(int)
+              o, h, cc = d["Open"].values, d["High"].values, c.values
+              cost = 1.4 if t.endswith(".MI") else 0.1
+              idx = d.index
+              rows = []
+              for k in range(n - 10):
+                  if not valid[k]:
+                      continue
+                  e = o[k + 1]
+                  rows.append((t, idx[k].year, tech[k], cost,
+                               (cc[k + 1] / e - 1) * 100, (cc[k + 3] / e - 1) * 100, (cc[k + 5] / e - 1) * 100, (cc[k + 10] / e - 1) * 100,
+                               (cc[k + 1] / cc[k] - 1) * 100, (h[k + 1:k + 6].max() / cc[k] - 1) * 100))
+              fr = pd.DataFrame(rows, columns=["t", "year", "tech", "cost", "r1", "r3", "r5", "r10", "nd", "mx5"])
+              # eventi: giorno E con rialzo >= 5% / 10%; segnale disponibile al giorno E-1 (e nei 5 giorni prima)
+              r = np.r_[np.nan, cc[1:] / cc[:-1] - 1]
+              ev = []
+              for E in range(6, n):
+                  if r[E] >= 0.05 and valid[E - 1]:
+                      ev.append((t, r[E] * 100, tech[E - 1], [tech[j] if valid[j] else -99 for j in range(E - 5, E)]))
+              return fr, ev
+
+
+          def report(fr, ev, ctx):
+              thr = 2 - ctx
+              buy = fr["tech"] >= thr
+              base = fr
+              b = fr[buy]
+              lines = []
+              lines.append(f"--- contesto {ctx:+d}: BUY se punteggio tecnico >= {thr} ---")
+              lines.append(f"giorni-titolo validi {len(base)} | BUY {len(b)} ({100*len(b)/len(base):.1f}%)")
+              for h in ("r1", "r3", "r5", "r10"):
+                  nb = (b[h] - b["cost"]).mean()
+                  na = (base[h] - base["cost"]).mean()
+                  win = 100 * ((b[h] - b["cost"]) > 0).mean()
+                  lines.append(f"rendimento netto {h}: BUY {nb:+.2f}% (vincenti {win:.0f}%) | tutti i giorni {na:+.2f}% | differenza {nb-na:+.2f}")
+              p_b, p_a = 100 * (b["nd"] >= 5).mean(), 100 * (base["nd"] >= 5).mean()
+              q_b, q_a = 100 * (b["mx5"] >= 10).mean(), 100 * (base["mx5"] >= 10).mean()
+              lines.append(f"P(rialzo >= +5% il giorno dopo): BUY {p_b:.2f}% contro base {p_a:.2f}% (x{p_b/p_a:.2f})")
+              lines.append(f"P(massimo a 5 sedute >= +10%): BUY {q_b:.2f}% contro base {q_a:.2f}% (x{q_b/q_a:.2f})")
+              for lo in (5, 10):
+                  sub = [e for e in ev if e[1] >= lo]
+                  if sub:
+                      l1 = 100 * np.mean([e[2] >= thr for e in sub])
+                      l5 = 100 * np.mean([any(x >= thr for x in e[3]) for e in sub])
+                      lines.append(f"rialzi >= +{lo}%: {len(sub)} | preceduti da BUY il giorno prima {l1:.1f}% | in uno dei 5 giorni prima {l5:.1f}% (BUY e' il {100*len(b)/len(base):.1f}% dei giorni)")
+              return lines
+
+
+          def by_year(fr, ctx):
+              thr = 2 - ctx
+              out = [f"--- per anno, contesto {ctx:+d}: BUY, rendimento netto a 5 sedute (tutti i giorni) ---"]
+              for y, g in fr.groupby("year"):
+                  b = g[g["tech"] >= thr]
+                  if len(b):
+                      out.append(f"{y}: BUY n={len(b)} {(b['r5']-b['cost']).mean():+.2f}% | tutti n={len(g)} {(g['r5']-g['cost']).mean():+.2f}%")
+              return out
+
+
+          def main(data):
+              frames, events = [], []
+              for t, d in data.items():
+                  r = per_ticker(t, d)
+                  if r:
+                      frames.append(r[0]); events += r[1]
+              fr = pd.concat(frames, ignore_index=True)
+              first = f"TITOLI {len(frames)} | periodo dal 2019 | giorni-titolo {len(fr)} | eventi >=5% {len(events)}"
+              msgs = [[first] + [f"distribuzione punteggio tecnico (rsi+macd+bande): " + ", ".join(f"{k:+d}:{100*v:.0f}%" for k, v in sorted((fr['tech'].value_counts(normalize=True)).items()))]]
+              for ctx in (1, 0, -1):
+                  msgs.append(report(fr, events, ctx))
+              msgs.append(by_year(fr, 1) + by_year(fr, 0))
+              for i, m in enumerate(msgs, 1):
+                  print("\n".join(m))
+                  print(f"::notice title=retrospettivo {i}::" + "%0A".join(m))
+
+
+          if __name__ == "__main__":
+              main(fetch(T))
+          PY
