@@ -1,0 +1,143 @@
+name: Diagnostica momentum USA con uscite ATR e trailing (sola lettura)
+
+# Solo manuale. Nessun segreto, nessuna scrittura su database o repository.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  usa:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+      - name: Installa dipendenze (stesse versioni di Slow)
+        run: pip install --retries 5 --timeout 60 "yfinance>=1.7.0" pandas==2.2.2 numpy==2.0.2 pandas-ta-classic==0.8.32
+      - name: Test USA
+        run: |
+          python - <<'PY'
+          import warnings, time
+          warnings.filterwarnings("ignore")
+          import numpy as np, pandas as pd
+          import pandas_ta_classic as ta
+
+          T = "A2A.MI,AAPL,ABBV,ABNB,ABT,ADBE,ADI,AMAT,AMD,AMGN,AMP.MI,AMZN,AVGO,AVIO.MI,AXP,BA,BAC,BAMI.MI,BC.MI,BKNG,BLK,BMED.MI,BMPS.MI,BMY,BPE.MI,BRK-B,C,CAT,CMCSA,CME,COIN,COP,COST,CPR.MI,CRM,CRWD,CSCO,CVX,DE,DHR,DIA.MI,DIS,DUK,ENEL.MI,ENI.MI,EOG,ERG.MI,FDX,G.MI,GE,GILD,GOOG,GOOGL,GS,HD,HER.MI,HON,IBM,ICE,IG.MI,INTC,INTU,INW.MI,IP.MI,IRE.MI,ISP.MI,ISRG,IVG.MI,JNJ,JPM,JUVE.MI,KO,LDO.MI,LLY,LMT,LOW,MA,MAR,MB.MI,MCD,MCO,MDT,MELI,META,MO,MONC.MI,MRK,MS,MSFT,MU,NEE,NFLX,NKE,NOW,NVDA,ORCL,PANW,PEP,PFE,PG,PLTR,PM,PRY.MI,PST.MI,PYPL,QCOM,RACE.MI,REC.MI,RTX,SBUX,SHOP,SLB,SNOW,SO,SOL.MI,SPGI,SRG.MI,STLAM.MI,STMMI.MI,T,TIT.MI,TMO,TRN.MI,TSLA,TXN,UBER,UCG.MI,UNP,UPS,V,VZ,WFC,WMT,XOM".split(",")
+          RULES = ["B0", "R2"]
+          NAMES = {"B0": "Modulo B (contesto 0, tecnico>=2)", "B1": "Modulo B (contesto +1, tecnico>=1)", "R1": "1 Breakout 20 sedute",
+                   "R2": "2 Momentum (+3% in 3 o +5% in 5)", "R3": "3 Breakout + volume 1,5x", "R4": "4 Combinata (breakout o accelerazione, volume se disponibile)"}
+
+
+          def fetch(tickers):
+              import yfinance as yf
+              out = {}
+              for i in range(0, len(tickers), 20):
+                  b = tickers[i:i + 20]
+                  try:
+                      df = yf.download(b, start="2019-06-01", interval="1d", auto_adjust=True, group_by="ticker", progress=False)
+                  except Exception:
+                      df = None
+                  for t in b:
+                      try:
+                          out[t] = df[t].dropna(subset=["Close"]).copy()
+                      except Exception:
+                          pass
+                  time.sleep(3)
+              return out
+
+
+
+          EXITS = ["S0 nessuno stop (10 sedute)", "S1 stop 1,5 ATR", "S2 stop 1,5 ATR + pareggio dopo +1 ATR", "S3 stop 1,5 ATR + trailing 2 ATR", "S4 trailing 8%"]
+          USA = [t for t in T if not t.endswith(".MI")]
+
+
+          def prep(d):
+              d = d.sort_index()[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Open", "High", "Low", "Close"])
+              d = d[(d[["Open", "High", "Low", "Close"]] > 0).all(axis=1)]
+              if len(d) < 120:
+                  return None
+              c = d["Close"]
+              rsi, macd, bb, atr = ta.rsi(c, length=14), ta.macd(c), ta.bbands(c, length=20), ta.atr(d["High"], d["Low"], c, length=14)
+              if rsi is None or macd is None or bb is None or atr is None:
+                  return None
+              m = macd.filter(regex=r"^MACD_").iloc[:, 0]; ms = macd.filter(regex=r"^MACDs_").iloc[:, 0]
+              bl = bb.filter(regex=r"^BBL_").iloc[:, 0]; bu = bb.filter(regex=r"^BBU_").iloc[:, 0]
+              bp = (c - bl) / (bu - bl)
+              ok = (rsi.notna() & m.notna() & ms.notna() & bp.notna() & (bu > bl) & atr.notna()).values
+              tech = np.where(rsi < 30, 2, np.where(rsi > 70, -2, 0)) + np.where(m > ms, 1, -1) + np.where(bp < 0.2, 1, np.where(bp > 0.8, -1, 0))
+              mom = (((c / c.shift(3) - 1) >= 0.03) | ((c / c.shift(5) - 1) >= 0.05)).values
+              return d, atr.values, ok, {"B0": ok & (tech >= 2), "R2": ok & mom}
+
+
+          def simulate(t, d, atr, ok, f):
+              n = len(d); o, h, l, c = (d[k].values for k in ("Open", "High", "Low", "Close"))
+              idx = np.arange(25, n - 10)
+              idx = idx[ok[idx]]
+              if len(idx) == 0:
+                  return None
+              E = o[idx + 1]; A = atr[idx]; cost = 0.1
+              res = {"year": d.index.year.values[idx], "B0": f["B0"][idx], "R2": f["R2"][idx]}
+              for ei, name in enumerate(EXITS):
+                  alive = np.ones(len(idx), bool); xp = np.full(len(idx), np.nan); stopped = np.zeros(len(idx), bool)
+                  stop = np.full(len(idx), -np.inf); hwm = E.copy()
+                  if ei in (1, 2, 3): stop = E - 1.5 * A
+                  if ei == 4: stop = E * 0.92
+                  for k in range(1, 11):
+                      oj, hj, lj = o[idx + k], h[idx + k], l[idx + k]
+                      gap = alive & (oj <= stop)
+                      xp[gap] = oj[gap]; stopped |= gap; alive &= ~gap
+                      hwm = np.maximum(hwm, hj)
+                      if ei == 2: stop = np.where(hj >= E + A, np.maximum(stop, E), stop)
+                      if ei == 3: stop = np.maximum(stop, hwm - 2 * A)
+                      if ei == 4: stop = np.maximum(stop, hwm * 0.92)
+                      hit = alive & (lj <= stop)
+                      xp[hit] = stop[hit]; stopped |= hit; alive &= ~hit
+                  xp[alive] = c[idx + 10][alive]
+                  res[f"n{ei}"] = (xp / E - 1) * 100 - cost; res[f"s{ei}"] = stopped
+              return pd.DataFrame(res)
+
+
+          def main(data):
+              frs = []
+              for t, d in data.items():
+                  if t.endswith(".MI"): continue
+                  p = prep(d)
+                  if p is None: continue
+                  fr = simulate(t, *p)
+                  if fr is not None: frs.append(fr)
+              fr = pd.concat(frs, ignore_index=True)
+              out = [[f"TITOLI USA {len(frs)} | giorni-titolo {len(fr)} | segnali B0 {int(fr['B0'].sum())} ({100*fr['B0'].mean():.1f}%) | segnali momentum {int(fr['R2'].sum())} ({100*fr['R2'].mean():.1f}%)"]]
+              groups = [("tutti i giorni", slice(None)), ("Modulo B (contesto 0)", "B0"), ("Momentum", "R2")]
+              m2 = ["--- USA, netto per operazione dopo costi 0,1%: n | medio | mediano | vincenti | peggiore | fermati dallo stop ---"]
+              for ei, name in enumerate(EXITS):
+                  m2.append(f"[{name}]")
+                  for lab, g in groups:
+                      s = fr if isinstance(g, slice) else fr[fr[g]]
+                      x = s[f"n{ei}"]
+                      m2.append(f"   {lab}: n={len(s)} | {x.mean():+.2f} | {x.median():+.2f} | {100*(x>0).mean():.0f}% | {x.min():+.1f}% | {100*s[f's{ei}'].mean():.0f}%")
+              out.append(m2)
+              m3 = ["--- per anno: netto medio B0 / momentum / tutti i giorni (n B0, n momentum) ---"]
+              for ei in (0, 2, 3):
+                  m3.append(f"[{EXITS[ei]}]")
+                  for y in sorted(fr["year"].unique()):
+                      s = fr[fr["year"] == y]
+                      b, r = s[s["B0"]], s[s["R2"]]
+                      m3.append(f"   {y}: {b[f'n{ei}'].mean():+.2f} / {r[f'n{ei}'].mean():+.2f} / {s[f'n{ei}'].mean():+.2f} ({len(b)}, {len(r)})")
+              out.append(m3)
+              m4 = ["--- periodo finale 2025-2026 (netto medio; n) ---"]
+              s = fr[fr["year"] >= 2025]
+              for ei, name in enumerate(EXITS):
+                  b, r = s[s["B0"]], s[s["R2"]]
+                  m4.append(f"{name}: B0 {b[f'n{ei}'].mean():+.2f} ({len(b)}) | momentum {r[f'n{ei}'].mean():+.2f} ({len(r)}) | tutti {s[f'n{ei}'].mean():+.2f}")
+              out.append(m4)
+              for i, m in enumerate(out, 1):
+                  print("\n".join(m))
+                  print(f"::notice title=usa momentum {i}::" + "%0A".join(m))
+
+
+          if __name__ == "__main__":
+              main(fetch(T))
+          PY
