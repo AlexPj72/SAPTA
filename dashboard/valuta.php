@@ -54,6 +54,8 @@ $daily_values = array_map(fn($d) => (float) $d['close'], $daily);
 $last_close = !empty($daily) ? (float) end($daily)['close'] : null;
 $prev_close = count($daily) > 1 ? (float) $daily[count($daily) - 2]['close'] : null;
 $change_pct = ($last_close !== null && $prev_close) ? (($last_close / $prev_close - 1) * 100) : null;
+$dc = day_change($daily, !empty($intraday_raw) ? ['close' => (float)$intraday_raw[0]['close'], 'ts' => $intraday_raw[0]['timestamp']] : null);
+if ($dc) $change_pct = $dc['pct'];
 $intraday_labels = array_map(fn($d) => date('H:i', strtotime($d['timestamp'])), $intraday);
 $intraday_values = array_map(fn($d) => (float) $d['close'], $intraday);
 $target_price = $signal['target_price'] ?? null;

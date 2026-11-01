@@ -102,6 +102,9 @@ if ($pos && $pos['quantity'] !== null) {
 $last_close = !empty($daily) ? (float) end($daily)['close'] : null;
 $prev_close = count($daily) > 1 ? (float) $daily[count($daily) - 2]['close'] : null;
 $change_pct = ($last_close !== null && $prev_close) ? (($last_close / $prev_close - 1) * 100) : null;
+$change_note = '';
+$dc = day_change($daily, !empty($intraday_raw) ? ['close' => (float)$intraday_raw[0]['close'], 'ts' => $intraday_raw[0]['timestamp']] : null);
+if ($dc) { $change_pct = $dc['pct']; $change_note = $dc['note']; }
 $closes_120 = array_map(fn($d) => (float) $d['close'], $daily);
 $min_120 = $closes_120 ? min($closes_120) : null;
 $max_120 = $closes_120 ? max($closes_120) : null;
@@ -154,7 +157,7 @@ $market = market_status($ticker);
         <div class="stat-value"><?= fmt_eur($last_close) ?></div>
     </div>
     <div class="stat-card <?= ($change_pct ?? 0) >= 0 ? 'good' : 'bad' ?>">
-        <div class="stat-label">Variazione gg.</div>
+        <div class="stat-label">Variazione gg.<?= $change_note ? ' · ' . e($change_note) : '' ?></div>
         <div class="stat-value"><?= $change_pct !== null ? (($change_pct >= 0 ? '+' : '') . number_format($change_pct, 2) . '%') : '—' ?></div>
     </div>
     <div class="stat-card">

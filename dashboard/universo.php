@@ -34,6 +34,7 @@ foreach ($latest_signals as $s) {
     if ($t !== '' && !isset($signal_by_ticker[$t])) $signal_by_ticker[$t] = $s;
 }
 
+$live_map = live_bars_map();
 $rows = [];
 foreach ($universe as $u) {
     $ticker = $u['ticker'] ?? '';
@@ -41,15 +42,15 @@ foreach ($universe as $u) {
     $latest = $history[0] ?? null;
     $previous = $history[1] ?? null;
     $price = $latest['close'] ?? null;
-    $change = null;
-    if ($price !== null && $previous && (float) $previous['close'] != 0) {
-        $change = ((float) $price / (float) $previous['close'] - 1) * 100;
-    }
+    $change = null; $change_note = '';
+    $dc = $history ? day_change(array_reverse($history), $live_map[$ticker] ?? null) : null;
+    if ($dc) { $change = $dc['pct']; $price = $dc['price']; $change_note = $dc['note']; }
     $rows[] = [
         'ticker' => $ticker,
         'sector' => $u['sector'] ?? '—',
         'price' => $price,
         'change' => $change,
+        'change_note' => $change_note,
         'history' => $history,
         'signal' => $signal_by_ticker[$ticker]['filtered_action'] ?? null,
     ];
@@ -139,6 +140,7 @@ usort($rows, function ($a, $b) use ($sort) {
                 <td><?= $r['price'] !== null ? number_format($r['price'], 2) : '—' ?></td>
                 <td class="<?= ($r['change'] ?? 0) >= 0 ? 'positive' : 'negative' ?>">
                     <?= $r['change'] !== null ? (($r['change'] >= 0 ? '+' : '') . number_format($r['change'], 2) . '%') : '—' ?>
+                    <?php if ($r['change_note']): ?><br><small class="muted"><?= e($r['change_note']) ?></small><?php endif; ?>
                 </td>
                 <td><?= sparkline_svg($r['history']) ?></td>
                 <td><?php if ($r['signal']): ?><span class="badge signal-badge <?= strtolower(e($r['signal'])) ?>"><?= e($r['signal']) ?></span><?php else: ?><span class="muted">Nessuno</span><?php endif; ?></td>

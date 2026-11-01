@@ -435,3 +435,39 @@ function build_chat_context() {
         . "Contesto minimo: capitale operativo " . ($capital !== null ? fmt_eur($capital) : 'non impostato')
         . ($has_briefing ? "; è disponibile il briefing pre-apertura di oggi (chiedimelo se vuoi che lo consulti)." : "; nessun briefing generato oggi.");
 }
+
+
+// ---- Variazione giornaliera con data dichiarata ----
+// Le barre giornaliere arrivano con una seduta di ritardo; le barre a 15 minuti sono aggiornate. La variazione usa l'ultima barra
+// a 15 minuti quando e' piu' recente dell'ultima barra giornaliera e dice sempre a quale seduta e a quale chiusura si riferisce.
+function live_bars_map() {   // ultima barra a 15 minuti di ogni titolo (una richiesta per mercato)
+    $map = [];
+    foreach (['like.*.MI', 'not.like.*.MI'] as $flt) {
+        $l = supabase_query('prezzi', ['select' => 'timestamp', 'interval' => 'eq.15m', 'ticker' => $flt, 'order' => 'timestamp.desc', 'limit' => 1]);
+        if (!$l) continue;
+        $since = gmdate('Y-m-d\TH:i:s\Z', strtotime($l[0]['timestamp']) - 3600);
+        $rows = supabase_query('prezzi', ['select' => 'ticker,timestamp,close', 'interval' => 'eq.15m', 'ticker' => $flt,
+            'timestamp' => 'gte.' . $since, 'close' => 'gt.0', 'order' => 'timestamp.desc', 'limit' => 1000]);
+        foreach ($rows as $r) if (!isset($map[$r['ticker']])) $map[$r['ticker']] = ['close' => (float)$r['close'], 'ts' => $r['timestamp']];
+    }
+    return $map;
+}
+function last_intraday_bar($ticker) {
+    $r = supabase_query('prezzi', ['select' => 'timestamp,close', 'ticker' => 'eq.' . $ticker, 'interval' => 'eq.15m', 'close' => 'gt.0', 'order' => 'timestamp.desc', 'limit' => 1]);
+    return $r ? ['close' => (float)$r[0]['close'], 'ts' => $r[0]['timestamp']] : null;
+}
+function day_change($daily_asc, $live) {   // $daily_asc: barre giornaliere in ordine crescente (timestamp, close); $live: ['close','ts'] o null
+    if (!$daily_asc) return null;
+    $last = end($daily_asc); $last_date = substr($last['timestamp'], 0, 10);
+    $d = function ($ts) { return date('d/m', strtotime($ts)); };
+    if ($live && substr($live['ts'], 0, 10) > $last_date && (float)$last['close'] > 0) {
+        return ['pct' => ($live['close'] / (float)$last['close'] - 1) * 100, 'price' => $live['close'], 'live' => true,
+                'note' => $d($live['ts']) . ' vs chiusura del ' . $d($last['timestamp'])];
+    }
+    if (count($daily_asc) < 2) return null;
+    $prev = $daily_asc[count($daily_asc) - 2];
+    if ((float)$prev['close'] <= 0) return null;
+    return ['pct' => ((float)$last['close'] / (float)$prev['close'] - 1) * 100, 'price' => (float)$last['close'], 'live' => false,
+            'note' => $d($last['timestamp']) . ' vs chiusura del ' . $d($prev['timestamp'])];
+}
+
