@@ -438,36 +438,61 @@ function build_chat_context() {
 
 
 // ---- Variazione giornaliera con data dichiarata ----
-// Le barre giornaliere arrivano con una seduta di ritardo; le barre a 15 minuti sono aggiornate. La variazione usa l'ultima barra
-// a 15 minuti quando e' piu' recente dell'ultima barra giornaliera e dice sempre a quale seduta e a quale chiusura si riferisce.
-function live_bars_map() {   // ultima barra a 15 minuti di ogni titolo (una richiesta per mercato)
-    $map = [];
-    foreach (['like.*.MI', 'not.like.*.MI'] as $flt) {
+// Le barre giornaliere arrivano in ritardo (USA: 0-1 sedute, Italia: fino a 2); le barre a 15 minuti sono aggiornate.
+// La variazione e' sempre "ultima barra a 15 minuti contro la chiusura della seduta IMMEDIATAMENTE precedente": la base e' la
+// chiusura giornaliera di quel giorno se presente, altrimenti l'ultima barra a 15 minuti di chiusura di quel giorno. Se la base della
+// seduta precedente non e' disponibile NON si confrontano sedute diverse: si usa il calcolo giornaliero, con le sue date.
+function prev_weekday($date) {   // giorno feriale precedente (Y-m-d); le festivita' non sono note: in quel caso il confronto viene scartato
+    $t = strtotime($date . ' 00:00:00 UTC');
+    do { $t -= 86400; } while (in_array((int)gmdate('N', $t), [6, 7], true));
+    return gmdate('Y-m-d', $t);
+}
+function closing_bar_ok($ts, $eu) {   // l'ultima barra e' davvero di chiusura (orario UTC: Italia dalle 15:00, USA dalle 19:30)
+    $h = (int)gmdate('G', strtotime($ts)) + (int)gmdate('i', strtotime($ts)) / 60;
+    return $eu ? $h >= 15.0 : $h >= 19.5;
+}
+function live_bars_maps() {   // ['live' => ultima barra, 'prev' => barra di chiusura della seduta precedente] per ogni titolo
+    $live = []; $prev = [];
+    foreach ([['like.*.MI', true], ['not.like.*.MI', false]] as [$flt, $eu]) {
         $l = supabase_query('prezzi', ['select' => 'timestamp', 'interval' => 'eq.15m', 'ticker' => $flt, 'order' => 'timestamp.desc', 'limit' => 1]);
         if (!$l) continue;
-        $since = gmdate('Y-m-d\TH:i:s\Z', strtotime($l[0]['timestamp']) - 3600);
+        $latest = strtotime($l[0]['timestamp']);
         $rows = supabase_query('prezzi', ['select' => 'ticker,timestamp,close', 'interval' => 'eq.15m', 'ticker' => $flt,
-            'timestamp' => 'gte.' . $since, 'close' => 'gt.0', 'order' => 'timestamp.desc', 'limit' => 1000]);
-        foreach ($rows as $r) if (!isset($map[$r['ticker']])) $map[$r['ticker']] = ['close' => (float)$r['close'], 'ts' => $r['timestamp']];
+            'timestamp' => 'gte.' . gmdate('Y-m-d\TH:i:s\Z', $latest - 3600), 'close' => 'gt.0', 'order' => 'timestamp.desc', 'limit' => 1000]);
+        foreach ($rows as $r) if (!isset($live[$r['ticker']])) $live[$r['ticker']] = ['close' => (float)$r['close'], 'ts' => $r['timestamp']];
+        $pd = prev_weekday(gmdate('Y-m-d', $latest));
+        $from = $pd . ($eu ? 'T15:00:00Z' : 'T19:30:00Z'); $to = $pd . ($eu ? 'T17:00:00Z' : 'T21:30:00Z');
+        $rows = supabase_query('prezzi', ['select' => 'ticker,timestamp,close', 'interval' => 'eq.15m', 'ticker' => $flt,
+            'timestamp' => 'gte.' . $from, 'close' => 'gt.0', 'order' => 'timestamp.desc', 'limit' => 1000]);
+        foreach ($rows as $r) if (substr($r['timestamp'], 0, 10) === $pd && strtotime($r['timestamp']) <= strtotime($to) && !isset($prev[$r['ticker']])) $prev[$r['ticker']] = ['close' => (float)$r['close'], 'ts' => $r['timestamp']];
     }
-    return $map;
+    return ['live' => $live, 'prev' => $prev];
 }
-function last_intraday_bar($ticker) {
-    $r = supabase_query('prezzi', ['select' => 'timestamp,close', 'ticker' => 'eq.' . $ticker, 'interval' => 'eq.15m', 'close' => 'gt.0', 'order' => 'timestamp.desc', 'limit' => 1]);
-    return $r ? ['close' => (float)$r[0]['close'], 'ts' => $r[0]['timestamp']] : null;
+function bars_live_prev($bars_desc, $eu) {   // dalle barre a 15 minuti di un solo titolo (piu' recenti per prime): [ultima barra, barra di chiusura della seduta precedente]
+    if (!$bars_desc) return [null, null];
+    $live = ['close' => (float)$bars_desc[0]['close'], 'ts' => $bars_desc[0]['timestamp']];
+    $pd = prev_weekday(substr($live['ts'], 0, 10)); $prev = null;
+    foreach ($bars_desc as $b) if (substr($b['timestamp'], 0, 10) === $pd && closing_bar_ok($b['timestamp'], $eu)) { $prev = ['close' => (float)$b['close'], 'ts' => $b['timestamp']]; break; }
+    return [$live, $prev];
 }
-function day_change($daily_asc, $live) {   // $daily_asc: barre giornaliere in ordine crescente (timestamp, close); $live: ['close','ts'] o null
+function day_change($daily_asc, $live, $prev_live = null, $eu = false) {   // $daily_asc: barre giornaliere in ordine crescente (timestamp, close)
     if (!$daily_asc) return null;
     $last = end($daily_asc); $last_date = substr($last['timestamp'], 0, 10);
     $d = function ($ts) { return date('d/m', strtotime($ts)); };
-    if ($live && substr($live['ts'], 0, 10) > $last_date && (float)$last['close'] > 0) {
-        return ['pct' => ($live['close'] / (float)$last['close'] - 1) * 100, 'price' => $live['close'], 'live' => true,
-                'note' => $d($live['ts']) . ' vs chiusura del ' . $d($last['timestamp'])];
+    $dh = function ($ts) { $x = new DateTime($ts, new DateTimeZone('UTC')); return $x->setTimezone(new DateTimeZone('Europe/Rome'))->format('d/m H:i'); };
+    if ($live && substr($live['ts'], 0, 10) > $last_date) {   // c'e' una seduta piu' recente delle barre giornaliere
+        $pd = prev_weekday(substr($live['ts'], 0, 10));
+        if ($last_date === $pd && (float)$last['close'] > 0)
+            return ['pct' => ($live['close'] / (float)$last['close'] - 1) * 100, 'price' => $live['close'], 'live' => true,
+                    'note' => $dh($live['ts']) . ' vs chiusura del ' . $d($last['timestamp'])];
+        if ($prev_live && substr($prev_live['ts'], 0, 10) === $pd && closing_bar_ok($prev_live['ts'], $eu) && $prev_live['close'] > 0)
+            return ['pct' => ($live['close'] / $prev_live['close'] - 1) * 100, 'price' => $live['close'], 'live' => true,
+                    'note' => $dh($live['ts']) . ' vs chiusura del ' . $d($prev_live['ts']) . ' (barre a 15 min)'];
+        // base della seduta precedente non disponibile: nessun confronto tra sedute diverse
     }
     if (count($daily_asc) < 2) return null;
     $prev = $daily_asc[count($daily_asc) - 2];
     if ((float)$prev['close'] <= 0) return null;
     return ['pct' => ((float)$last['close'] / (float)$prev['close'] - 1) * 100, 'price' => (float)$last['close'], 'live' => false,
-            'note' => $d($last['timestamp']) . ' vs chiusura del ' . $d($prev['timestamp'])];
+            'note' => $d($last['timestamp']) . ' vs chiusura del ' . $d($prev['timestamp']) . ' (ultimo dato giornaliero)'];
 }
-

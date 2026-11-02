@@ -34,7 +34,7 @@ foreach ($latest_signals as $s) {
     if ($t !== '' && !isset($signal_by_ticker[$t])) $signal_by_ticker[$t] = $s;
 }
 
-$live_map = live_bars_map();
+$lb = live_bars_maps(); $live_map = $lb['live']; $prev_map = $lb['prev'];
 $rows = [];
 foreach ($universe as $u) {
     $ticker = $u['ticker'] ?? '';
@@ -43,7 +43,7 @@ foreach ($universe as $u) {
     $previous = $history[1] ?? null;
     $price = $latest['close'] ?? null;
     $change = null; $change_note = '';
-    $dc = $history ? day_change(array_reverse($history), $live_map[$ticker] ?? null) : null;
+    $dc = $history ? day_change(array_reverse($history), $live_map[$ticker] ?? null, $prev_map[$ticker] ?? null, substr($ticker, -3) === '.MI') : null;
     if ($dc) { $change = $dc['pct']; $price = $dc['price']; $change_note = $dc['note']; }
     $rows[] = [
         'ticker' => $ticker,
