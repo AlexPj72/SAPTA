@@ -42,12 +42,14 @@ jobs:
         run: python src/modulo_a_ingestion.py
 
       - name: Run Modulo H - Screening (H1)
+        if: ${{ !cancelled() }}   # [Passo 1] parte anche se A esce con errore: l'errore di A resta visibile (job rosso), H1 non salta in silenzio
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python src/modulo_h_anomaly.py --stage=h1
 
       - name: Run Modulo AI Watch - Ipotesi qualitative + alert (NUOVO 18/09)
+        if: ${{ !cancelled() }}   # [Passo 1] idem: AI Watch non salta se A fallisce (la freschezza delle barre e' controllata in lettura)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
