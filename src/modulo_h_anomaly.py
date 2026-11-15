@@ -29,6 +29,7 @@ from urllib.parse import quote
 import requests
 import yfinance as yf
 from config import supabase
+from bar_freshness import is_bar_fresh
 from universe import get_universe
 
 WEIGHTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scoring_weights_v1.json')
@@ -150,6 +151,11 @@ def run_h1():
         # [Sezione 7] scarto a monte se l'ultima barra ha qualità dato negativa
         last_flag = bars[-1].get('data_quality_flag')
         if last_flag not in (None, 'ok'):
+            continue
+
+        # [PASSO 1 - 14/11/2026] freschezza calcolata in lettura: una barra 'ok' ma vecchia (mercato chiuso,
+        # feed fermo) non e' un dato corrente e non genera candidati.
+        if not is_bar_fresh(ticker, bars[-1].get('timestamp')):
             continue
 
         is_anomaly, volume_ratio, price_change = compute_intraday_anomaly(

@@ -43,6 +43,7 @@ from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 import requests
 from config import supabase, GEMINI_API_KEY
+from bar_freshness import is_bar_fresh
 from universe import get_universe
 from market_context import get_market_direction, market_direction_label, get_sector_strength
 
@@ -114,6 +115,9 @@ def get_universe_metrics():
         last_bar = bars[0]
         if last_bar.get('data_quality_flag') not in (None, 'ok'):
             continue  # stessa regola di H1: scarta se l'ultima barra non è affidabile (es. mercato chiuso)
+        # [PASSO 1 - 14/11/2026] freschezza calcolata in lettura (calendario di mercato), non piu' affidata al flag
+        if not is_bar_fresh(t, last_bar.get('timestamp')):
+            continue
         baseline = bars[1:]
         avg_vol = sum((b.get('volume') or 0) for b in baseline) / len(baseline) if baseline else 0
         if not avg_vol or last_bar.get('close') is None or baseline[-1].get('close') is None:
