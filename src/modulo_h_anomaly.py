@@ -23,6 +23,7 @@ import os
 import re
 import json
 import argparse
+import sys
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -81,13 +82,30 @@ def get_ticker_meta_map():
         return {}
 
 
-def compute_intraday_anomaly(bars, volume_threshold, price_threshold):
-    """Logica invariata dalla v3.3: volume ratio + variazione prezzo su barre intraday."""
-    *baseline_bars, current_bar = bars
+def is_valid_bar(bar):
+    """[Passo 3 - P1-2] Barra utilizzabile per baseline e confronto: flag 'ok' (o assente) e volume > 0.
+    Le barre stale, zero_volume o feed_error non entrano ne' nella baseline ne' come barra corrente."""
     try:
-        current_volume = float(current_bar['volume'] or 0)
+        volume = float(bar.get('volume') or 0)
+    except (TypeError, ValueError):
+        return False
+    return bar.get('data_quality_flag') in (None, 'ok') and volume > 0
+
+
+def compute_intraday_anomaly(bars, volume_threshold, price_threshold):
+    """Volume ratio + variazione di prezzo su barre intraday.
+    [Passo 3 - P1-2] La baseline (volume medio e prezzo di riferimento) usa ESCLUSIVAMENTE barre valide; la barra corrente
+    deve essere valida; servono almeno H1_MIN_BARS_FOR_BASELINE barre valide in tutto. Altrimenti: nessuna anomalia."""
+    if not bars or not is_valid_bar(bars[-1]):
+        return False, 0.0, 0.0
+    valid = [b for b in bars if is_valid_bar(b)]
+    if len(valid) < H1_MIN_BARS_FOR_BASELINE:
+        return False, 0.0, 0.0
+    *baseline_bars, current_bar = valid
+    try:
+        current_volume = float(current_bar['volume'])
         current_close = float(current_bar['close'])
-        baseline_volumes = [float(b['volume'] or 0) for b in baseline_bars]
+        baseline_volumes = [float(b['volume']) for b in baseline_bars]
         avg_volume = sum(baseline_volumes) / len(baseline_volumes) if baseline_volumes else 0
         if avg_volume == 0:
             return False, 0.0, 0.0
@@ -299,6 +317,11 @@ def compute_context_score(ticker):
 
 
 def run_h2():
+    """H2. [Passo 3 - P1-1] Promuove a B SOLO i candidati che superano davvero le soglie H2 (is_anomaly: volume >= 5x e
+    movimento >= 3%, su barre valide e fresche) e dispongono di un context_score. Tra questi si prendono i primi H2_TOP_N.
+    Chi non supera le soglie e' 'scartato_h2'. I problemi tecnici (dati non utilizzabili, errore sul contesto) NON
+    promuovono: il candidato resta 'h1_candidate' (verra' riprovato al run successivo) e il problema e' scritto nel log;
+    se ci sono errori tecnici il processo termina con codice 1 (visibile nel workflow)."""
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     try:
         response = (supabase.table('screening_candidates')
@@ -309,45 +332,61 @@ def run_h2():
         rows = response.data or []
     except Exception as e:
         print(f"❌ Errore lettura screening_candidates: {e}")
-        return
+        return 1
 
     if not rows:
         print("⚠️ Nessun candidato H1 da processare oggi")
-        return
+        return 0
 
-    enriched = []
+    enriched, rejected, waiting, errors = [], [], [], []
     for row in rows:
         ticker = row['ticker']
-        bars = get_recent_bars(ticker, H1_BARS_LOOKBACK)
-        if len(bars) < H1_MIN_BARS_FOR_BASELINE:
+        try:
+            bars = get_recent_bars(ticker, H1_BARS_LOOKBACK)
+        except Exception as e:
+            errors.append((ticker, f"lettura barre: {e}"))
+            continue
+        if not bars or not is_valid_bar(bars[-1]) or sum(1 for b in bars if is_valid_bar(b)) < H1_MIN_BARS_FOR_BASELINE:
+            waiting.append((ticker, 'barre valide insufficienti o ultima barra non valida'))
+            continue
+        if not is_bar_fresh(ticker, bars[-1].get('timestamp')):
+            waiting.append((ticker, 'ultima barra non fresca (problema di alimentazione o mercato chiuso)'))
             continue
 
-        _, volume_ratio, price_change = compute_intraday_anomaly(
+        is_anomaly, volume_ratio, price_change = compute_intraday_anomaly(
             bars, H2_VOLUME_ANOMALY_THRESHOLD, H2_PRICE_ANOMALY_THRESHOLD
         )
         anomaly_score = volume_ratio * abs(price_change) * 100
 
-        context_score = compute_context_score(ticker)
-        news_light_count = fetch_news_light_count(ticker)
+        try:
+            context_score = compute_context_score(ticker)
+            news_light_count = fetch_news_light_count(ticker)
+        except Exception as e:
+            errors.append((ticker, f"contesto/news: {e}"))
+            continue
+        if context_score is None:
+            errors.append((ticker, 'context_score non calcolabile: nessuna promozione'))
+            continue
 
         # Combinazione preliminare, NON la formula di ranking finale (quella
-        # è compito del Modulo E/ranking, Sezione 16) - qui serve solo per
+        # e' compito del Modulo E/ranking, Sezione 16) - qui serve solo per
         # scegliere chi promuovere a B. Da validare col backtest (Sezione 22).
-        combined_score = anomaly_score + (context_score or 0) * 10
+        combined_score = anomaly_score + context_score * 10
 
-        enriched.append({
+        item = {
             'id': row['id'],
             'ticker': ticker,
             'anomaly_score': round(anomaly_score, 3),
             'context_score': context_score,
             'news_light_count': news_light_count,
             'combined_score': combined_score,
-        })
+        }
+        (enriched if is_anomaly else rejected).append(item)
 
     enriched.sort(key=lambda c: c['combined_score'], reverse=True)
     promoted_ids = {c['id'] for c in enriched[:H2_TOP_N]}
 
-    for c in enriched:
+    for c in enriched + rejected:
         status = 'promosso_a_B' if c['id'] in promoted_ids else 'scartato_h2'
         try:
             supabase.table('screening_candidates').update({
@@ -358,9 +397,15 @@ def run_h2():
                 'status': status,
             }).eq('id', c['id']).execute()
         except Exception as e:
-            print(f"❌ Errore aggiornamento screening_candidates per {c['ticker']}: {e}")
+            errors.append((c['ticker'], f"aggiornamento stato: {e}"))
 
-    print(f"✅ H2: {len(enriched)} candidati processati, {len(promoted_ids)} promossi a Modulo B")
+    for t, why in waiting:
+        print(f"⏳ H2 {t}: in attesa, non promosso ({why})")
+    for t, why in errors:
+        print(f"❌ H2 {t}: errore tecnico, non promosso ({why})")
+    print(f"✅ H2: {len(rows)} candidati H1; {len(promoted_ids)} promossi a B, {len(enriched) - len(promoted_ids)} oltre il limite "
+          f"H2_TOP_N, {len(rejected)} sotto soglia, {len(waiting)} in attesa dati, {len(errors)} errori tecnici")
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
@@ -372,4 +417,4 @@ if __name__ == "__main__":
     if args.stage == 'h1':
         run_h1()
     else:
-        run_h2()
+        sys.exit(run_h2())
