@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from market_calendar import BAR_MINUTES, CalendarNotVerified, is_regular_bar, session_bounds
 
 CLOSE_GRACE_SECONDS = 60
-STALE_INGESTION_MINUTES = 90      # ritardo di acquisizione oltre il quale una barra "live" e' marcata stale (parametro da approvare)
+STALE_INGESTION_MINUTES = 30      # ritardo (dalla FINE della barra) oltre il quale una barra "live" e' marcata stale: massimo 30 minuti
 LIVE_WINDOW_MINUTES = 180         # una barra e' "live" se la sua fine e' piu' recente di questa finestra; piu' vecchia = recupero
 PRICE_TOL = 1e-6
 

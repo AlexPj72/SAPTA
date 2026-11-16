@@ -85,10 +85,12 @@ def test_nan_sui_prezzi_scartato():
 
 def test_stale_solo_live_e_solo_in_finestra():
     start = dt(2026, 11, 13, 9)                       # fine barra 09:15
-    now_100 = dt(2026, 11, 13, 10, 55)                # 100 min dopo: oltre soglia (90), dentro finestra (180)
+    now_100 = dt(2026, 11, 13, 10, 55)                # 100 min dopo la fine: oltre soglia (30), dentro finestra (180)
     assert rec('ENI.MI', start, now_100, live=True)[0][0]['data_quality_flag'] == 'stale'
     assert rec('ENI.MI', start, now_100, live=False)[0][0]['data_quality_flag'] == 'ok'     # backfill: mai stale
-    assert rec('ENI.MI', start, dt(2026, 11, 13, 9, 55), live=True)[0][0]['data_quality_flag'] == 'ok'   # 40 min
+    assert rec('ENI.MI', start, dt(2026, 11, 13, 9, 35), live=True)[0][0]['data_quality_flag'] == 'ok'     # 20 min
+    assert rec('ENI.MI', start, dt(2026, 11, 13, 9, 45), live=True)[0][0]['data_quality_flag'] == 'ok'     # 30 min esatti: ok
+    assert rec('ENI.MI', start, dt(2026, 11, 13, 9, 46), live=True)[0][0]['data_quality_flag'] == 'stale'  # 31 min: alimentazione in ritardo
     assert rec('ENI.MI', start, dt(2026, 11, 13, 14), live=True)[0][0]['data_quality_flag'] == 'ok'      # 4h45: recupero
     # la qualita' intrinseca prevale sul ritardo
     assert rec('ENI.MI', start, now_100, v=0)[0][0]['data_quality_flag'] == 'zero_volume'
