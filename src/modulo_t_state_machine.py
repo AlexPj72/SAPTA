@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notifications
+from sizing import REFERENCE_CAPITAL_EUR, RISK_PER_TRADE_PERCENT, ZONE_ATR_FRACTION, size_position   # noqa: F401  (dimensionamento condiviso con E)
 from market_calendar import (BAR_MINUTES, CalendarNotVerified, currency_of, is_regular_bar, last_regular_bar_start,
 
                              local_date, market_of, next_session_close, nth_session_date, session_bounds)
@@ -43,7 +44,6 @@ def _fromiso(s):
 
 
 # ---------------------------------------------------------------- parametri (specifica v0.3)
-ZONE_ATR_FRACTION = 0.5            # zona di ingresso: da R a R + 0,5*ATR
 STOP_ATR_MULT, TARGET_ATR_MULT = 1.5, 3.0   # invariati (Modulo B)
 MAX_HOLD_SESSIONS = 5              # REGOLA PROVVISORIA di paper trading, NON calibrata dal backtest (D5): costante configurabile
 FRESHNESS_MINUTES = 30             # regola F: un ingresso e' azionabile solo se la candela e' fresca
@@ -51,7 +51,6 @@ EXPIRY_GRACE_MINUTES = 20          # scadenza per tempo: aspetta che arrivino le
 BAR_CLOSED_GRACE_SECONDS = 60      # una candela e' chiusa se la sua fine + 60 s e' passata
 GAP_GRACE_MINUTES = 30             # una candela mancante si attende fino a 30 min dalla sua fine (A la ricopre al run successivo); poi e' "assenza alla fonte"
 COHERENCE_TOLERANCE = 0.005        # R-INV = 1,5A e TGT-R = 3A, tolleranza 0,5% del prezzo
-RISK_PER_TRADE_PERCENT = 0.01      # stessa formula di Modulo E (1% del capitale / distanza dallo stop)
 PORTFOLIO_CODE = 'PORTAFOGLIO_AI'   # FASE 5: il portafoglio virtuale gestito in automatico dall'IA (solo paper)
 EXECUTOR_MODE = 'PORTFOLIO'         # FASE 5: le intenzioni diventano operazioni virtuali sul portafoglio (nessun ordine reale)
 SIGNAL_LOOKBACK_DAYS = 3
@@ -89,13 +88,6 @@ def levels_are_coherent(ref, atr, inv, tgt):
     tol = COHERENCE_TOLERANCE * ref
     return abs((ref - inv) - STOP_ATR_MULT * atr) <= tol and abs((tgt - ref) - TARGET_ATR_MULT * atr) <= tol
 
-
-def position_size(fill_local, invalidation_price, capital_local, risk_percent=RISK_PER_TRADE_PERCENT):
-    """Stessa formula di Modulo E (calculate_position_size): rischio massimo / distanza dallo stop."""
-    stop_distance = abs(fill_local - invalidation_price)
-    if stop_distance <= 0:
-        return None
-    return capital_local * risk_percent / stop_distance
 
 
 def make_bar(row):
@@ -367,6 +359,24 @@ class Store:
             if _is_unique_violation(e):
                 return False
             raise
+
+    def reference_capital(self):
+        """[Passo 3] Capitale di riferimento = capital_state (come Modulo E). Tabella vuota = 1.000 EUR; errore di lettura = None
+        (nessun ingresso su un capitale presunto: il chiamante rimanda e ritenta)."""
+        try:
+            rows = self._t('capital_state').select('capital_eur,created_at').order('created_at', desc=True).limit(1).execute().data
+        except Exception:
+            return None
+        return float(rows[0]['capital_eur']) if rows else float(REFERENCE_CAPITAL_EUR)
+
+    def costs_for(self, market):
+        """[Passo 3] Riga di costi del mercato (stessa tabella e stessa mappatura di Modulo E). None se mancante o illeggibile."""
+        try:
+            rows = self._t('costi_operazione').select('*').eq('attivo', True).execute().data or []
+        except Exception:
+            return None
+        by = {('Alpaca', 'USA'): 'USA', ('Interactive Brokers', 'EU'): 'EU'}
+        return next((r for r in rows if by.get((r.get('broker'), r.get('mercato'))) == market), None)
 
     def update(self, lc, fields):
         self._t('trade_lifecycle').update(dict(fields, updated_at=_iso(datetime.now(timezone.utc)))).eq('id', lc['id']).execute()
@@ -653,11 +663,19 @@ class Engine:
         if cash is None:
             return self._note(lc, bar, 'ingresso rimandato: portafoglio non trovato', retry=True)
         reserved = self.store.reserved_eur()
-        sizing_capital_eur = (cash + reserved) if self.executor.name == 'NOT_LINKED' else (cash + self.store.invested_eur())
-        qty_f = position_size(fill, float(lc['invalidation_price']), sizing_capital_eur / fx_eur_per_local)
-        qty = math.floor(qty_f) if qty_f else 0
+        # [Passo 3 - P1-7] stessa funzione e stessi ingressi di Modulo E: prezzo R + 0,5 ATR, costi andata/ritorno nel rischio,
+        # quantita' intera, capitale di riferimento (capital_state). La cassa disponibile resta solo un controllo di fattibilita'.
+        capital_ref = self.store.reference_capital()
+        if capital_ref is None:
+            return self._note(lc, bar, 'ingresso rimandato: capitale di riferimento non leggibile', retry=True)
+        costs = self.store.costs_for(market)
+        if not costs:
+            return self._note(lc, bar, f'ingresso rimandato: costi di operazione del mercato {market} non disponibili', retry=True)
+        sz = size_position(float(lc['ref_price']), float(lc['atr']), float(lc['invalidation_price']), capital_ref,
+                           fx_eur_per_local, costs, lc.get('liquidity_bucket'))
+        qty = sz['quantity'] if sz else 0
         if qty < 1:
-            return self._note(lc, bar, 'SEGNALE VALIDO ma NON eseguito: quantita < 1 azione con il rischio per operazione', retry=True)
+            return self._note(lc, bar, 'SEGNALE VALIDO ma NON eseguito: quantita < 1 azione con il rischio per operazione (costi inclusi)', retry=True)
         countervalue = round(qty * fill * fx_eur_per_local, 2)
         available = cash - reserved
         if countervalue > available + 1e-9:
