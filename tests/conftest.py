@@ -12,9 +12,20 @@ _cfg.supabase = FakeSupabase()
 _cfg.FINNHUB_KEY = ''
 _cfg.PRICE_DIVERGENCE_THRESHOLD = 0.003
 _cfg.GEMINI_API_KEY = ''
+_cfg.NEWSAPI_KEY = ''
+_cfg.HUGGINGFACE_API_KEY = ''
+_cfg.NEWS_CACHE_MINUTES = 60
 sys.modules['config'] = _cfg
 if 'yfinance' not in sys.modules:
     try:
         import yfinance  # noqa: F401
     except ImportError:
         sys.modules['yfinance'] = types.ModuleType('yfinance')
+
+# librerie pesanti non necessarie ai test (indicatori, LLM): sostituite da moduli vuoti se non installate
+for _name in ('pandas_ta_classic', 'pandas_ta', 'google', 'google.genai', 'google.generativeai'):
+    if _name not in sys.modules:
+        try:
+            __import__(_name)
+        except ImportError:
+            sys.modules[_name] = types.ModuleType(_name)

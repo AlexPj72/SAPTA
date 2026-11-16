@@ -26,6 +26,7 @@ import pandas as pd
 import pandas_ta_classic as ta
 from datetime import datetime, timedelta, timezone
 from config import supabase, NEWSAPI_KEY, HUGGINGFACE_API_KEY, NEWS_CACHE_MINUTES, GEMINI_API_KEY
+from bar_freshness import is_bar_fresh
 from universe import get_universe_metadata
 
 # Hugging Face Inference Providers (endpoint attuale).
@@ -127,16 +128,34 @@ def analyze_sentiment(ticker, articles):
 # Indicatori tecnici - INVARIATO dalla v3.5 (fix barra provvisoria)
 # ============================================================
 
+PRICE_BARS_LOOKBACK = 8   # quante barre 15m recenti si guardano alla ricerca dell'ultima barra valida
+
+
 def get_latest_intraday_price(ticker):
+    """[Passo 3 - P1-3] Prezzo corrente = close dell'ULTIMA BARRA VALIDA (flag 'ok', volume > 0) e FRESCA (massimo 30 minuti
+    dalla fine della barra, bar_freshness). Barre stale, zero_volume o feed_error non determinano mai il prezzo, quindi
+    nemmeno stop, target e dimensionamento. Nessuna barra valida e fresca = None: il chiamante NON genera il segnale."""
     try:
         response = (supabase.table('prezzi')
-                    .select('close')
+                    .select('close,timestamp,volume,data_quality_flag')
                     .eq('ticker', ticker)
                     .eq('interval', '15m')
                     .order('timestamp', desc=True)
-                    .limit(1)
+                    .limit(PRICE_BARS_LOOKBACK)
                     .execute())
-        return float(response.data[0]['close']) if response.data else None
+        for row in (response.data or []):
+            try:
+                valid = row.get('data_quality_flag') in (None, 'ok') and float(row.get('volume') or 0) > 0 and float(row['close']) > 0
+            except (TypeError, ValueError):
+                valid = False
+            if not valid:
+                continue
+            if not is_bar_fresh(ticker, row.get('timestamp')):
+                print(f"⚠️ {ticker}: l'ultima barra valida ({row.get('timestamp')}) non e' fresca: nessun prezzo corrente")
+                return None
+            return float(row['close'])
+        print(f"⚠️ {ticker}: nessuna barra 15m valida tra le ultime {PRICE_BARS_LOOKBACK}: nessun prezzo corrente")
+        return None
     except Exception as e:
         print(f"⚠️ Errore lettura prezzo corrente per {ticker}: {e}")
         return None
@@ -261,7 +280,12 @@ def calculate_technical_indicators(ticker, daily_df=None):
             print(f"⚠️ {ticker}: indicatori degeneri (BB piatte o ATR<=0) - errore tecnico, verra ritentato")
             return None
 
-        current_price = get_latest_intraday_price(ticker) or float(df.iloc[-1]['Close'])
+        current_price = get_latest_intraday_price(ticker)
+        if current_price is None:
+            # [Passo 3 - P1-3] niente piu' ripiego sulla chiusura giornaliera: senza una barra 15m valida e fresca il prezzo
+            # non e' affidabile, quindi nessun segnale (errore tecnico: il candidato viene ritentato al run successivo)
+            print(f"❌ {ticker}: nessuna barra 15m valida e fresca, segnale NON generato")
+            return None
 
         return {
             'rsi': float(row['RSI']),
