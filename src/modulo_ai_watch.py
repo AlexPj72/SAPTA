@@ -155,7 +155,7 @@ def classify_anomaly(volume_ratio, price_change_pct):
 # [FIX 30/09 - handoff Codex] Un segnale e' "attivo" solo se approvato dal
 # filtro E, non HOLD e recente: senza finestra un vecchio BUY/SELL veniva
 # presentato come ancora valido.
-ACTIVE_SIGNAL_MAX_AGE_MINUTES = 35
+ACTIVE_SIGNAL_MAX_AGE_MINUTES = 30
 
 
 def get_active_signal(ticker):

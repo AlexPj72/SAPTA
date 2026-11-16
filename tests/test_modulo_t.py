@@ -212,3 +212,13 @@ def test_dry_run_non_scrive():
     eng = engine(bars, NOW, dry_run=True)
     eng.evaluate_active(active_lc())
     assert eng.store.events == {} and eng.store.updates == []
+
+
+def test_pazienza_sui_buchi_massimo_30_minuti():
+    assert T.GAP_GRACE_MINUTES <= 30
+    bars = _gap_bars()                                        # manca 08:30 (fine 08:45)
+    eng = engine(bars, dt(2026, 11, 13, 9, 14))               # 29 minuti dalla fine del buco: si attende
+    assert [b['start'].strftime('%H:%M') for b in eng._bars_after(watch_lc(), dt(2026, 11, 13, 7, 55))] == ['08:00', '08:15']
+    eng = engine(bars, dt(2026, 11, 13, 9, 16))               # 31 minuti: assenza alla fonte, si prosegue con evento
+    assert [b['start'].strftime('%H:%M') for b in eng._bars_after(watch_lc(), dt(2026, 11, 13, 7, 55))] == ['08:00', '08:15', '08:45']
+    assert any(k[1].startswith('DATA_GAP') for k in eng.store.events)

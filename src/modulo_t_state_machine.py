@@ -49,7 +49,7 @@ MAX_HOLD_SESSIONS = 5              # REGOLA PROVVISORIA di paper trading, NON ca
 FRESHNESS_MINUTES = 30             # regola F: un ingresso e' azionabile solo se la candela e' fresca
 EXPIRY_GRACE_MINUTES = 20          # scadenza per tempo: aspetta che arrivino le ultime candele (Borsa Italiana in ritardo)
 BAR_CLOSED_GRACE_SECONDS = 60      # una candela e' chiusa se la sua fine + 60 s e' passata
-GAP_GRACE_MINUTES = 45             # [Passo 2] una candela mancante si attende fino a 45 min dalla sua fine (A la ricopre al run successivo); poi e' "assenza alla fonte"
+GAP_GRACE_MINUTES = 30             # una candela mancante si attende fino a 30 min dalla sua fine (A la ricopre al run successivo); poi e' "assenza alla fonte"
 COHERENCE_TOLERANCE = 0.005        # R-INV = 1,5A e TGT-R = 3A, tolleranza 0,5% del prezzo
 RISK_PER_TRADE_PERCENT = 0.01      # stessa formula di Modulo E (1% del capitale / distanza dallo stop)
 PORTFOLIO_CODE = 'PORTAFOGLIO_AI'   # FASE 5: il portafoglio virtuale gestito in automatico dall'IA (solo paper)
@@ -527,7 +527,7 @@ class Engine:
 
     def _bars_after(self, lc, floor_start):
         """Candele CHIUSE e regolari successive a last_bar_start, in ordine, senza saltare buchi (Passo 2).
-        Una candela mancante si attende GAP_GRACE_MINUTES dalla sua fine (A la ricopre al run successivo): fino ad allora la
+        Una candela mancante si attende GAP_GRACE_MINUTES (30) dalla sua fine (A la ricopre al run successivo): fino ad allora la
         valutazione si ferma PRIMA del buco (nessun livello viene giudicato senza aver visto tutte le candele). Passato il
         periodo e' un'assenza alla fonte (nessuno scambio): si registra l'evento e si prosegue. Un buco IN CODA (nessuna
         candela successiva) non e' ancora un'assenza: si attende senza registrare nulla."""

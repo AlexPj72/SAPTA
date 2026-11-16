@@ -15,7 +15,8 @@ def dt(y, m, d, h, mi=0, s=0):
 def test_barra_ok_ma_vecchia_non_e_fresca():
     now = dt(2026, 11, 13, 12, 20)
     assert is_bar_fresh('ENI.MI', '2026-11-13T12:00:00+00:00', now)            # chiusa da 5 minuti
-    assert is_bar_fresh('ENI.MI', '2026-11-13T11:30:00+00:00', now)            # 35 minuti: dentro i 45
+    assert is_bar_fresh('ENI.MI', '2026-11-13T11:45:00+00:00', now)            # chiusa da 20 minuti
+    assert not is_bar_fresh('ENI.MI', '2026-11-13T11:30:00+00:00', now)        # chiusa da 35 minuti: oltre i 30
     assert not is_bar_fresh('ENI.MI', '2026-11-13T11:00:00+00:00', now)        # 65 minuti
     assert not is_bar_fresh('ENI.MI', '2026-11-12T16:15:00+00:00', now)        # chiusura di ieri
     assert not is_bar_fresh('AAPL', '2026-11-13T20:45:00+00:00', dt(2026, 11, 14, 14, 0))   # venerdi' sera, sabato
@@ -80,3 +81,11 @@ def test_ai_watch_barra_fresca_e_barra_vecchia(monkeypatch):
     now = dt(2026, 11, 13, 12, 5)
     assert len(_watch(monkeypatch, _bars(dt(2026, 11, 13, 11, 45)), now)) == 1
     assert _watch(monkeypatch, _bars(dt(2026, 11, 12, 16, 15)), now) == []
+
+
+def test_soglia_di_freschezza_massimo_30_minuti_dalla_fine_della_barra():
+    start = '2026-11-13T11:45:00+00:00'                # fine 12:00
+    assert is_bar_fresh('ENI.MI', start, dt(2026, 11, 13, 12, 30))        # 30 minuti esatti
+    assert not is_bar_fresh('ENI.MI', start, dt(2026, 11, 13, 12, 31))    # 31 minuti
+    from bar_freshness import FRESHNESS_MAX_MINUTES
+    assert FRESHNESS_MAX_MINUTES <= 30
