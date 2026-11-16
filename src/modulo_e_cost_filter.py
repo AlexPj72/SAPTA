@@ -30,10 +30,13 @@ Cambiamenti rispetto a v3.2:
 """
 import re
 import argparse
+import sys
 import json
 import os
 from datetime import datetime, timedelta, timezone
 from config import supabase
+from sizing import (DEFAULT_SLIPPAGE, REFERENCE_CAPITAL_EUR, RISK_PER_TRADE_PERCENT, SLIPPAGE_BY_LIQUIDITY,  # noqa: F401
+                    calculate_operation_cost, entry_reference_price, round_trip_cost, size_position)
 
 
 def _fromiso(s):
@@ -59,16 +62,7 @@ with open(WEIGHTS_PATH) as f:
 RANKING_WEIGHTS = _WEIGHTS.get('ranking_weights', {})
 SCORING_WEIGHTS_VERSION = _WEIGHTS['version']
 
-# [Sezione 12] Valori di default, non calibrati - vedi v5.1.1 §28 alert 4
-SLIPPAGE_BY_LIQUIDITY = {
-    'LIQ_HIGH': 0.0005,
-    'LIQ_MEDIUM': 0.0015,
-    'LIQ_LOW': 0.0040,
-}
-DEFAULT_SLIPPAGE = 0.0040  # fail-safe: se liquidity_bucket manca, tratta come il caso peggiore
-
 # [Sezione 13] Rischio massimo per singola operazione, % del capitale
-RISK_PER_TRADE_PERCENT = 0.01  # 1%, punto medio del range 0.5-1% indicato in spec
 
 # Fallback estremo se capital_state è vuota o irraggiungibile - non è più il
 # valore "vero" del capitale, solo una rete di sicurezza per non bloccare il
@@ -76,28 +70,29 @@ RISK_PER_TRADE_PERCENT = 0.01  # 1%, punto medio del range 0.5-1% indicato in sp
 # impostabile a runtime dalla dashboard: consente di testare capitali diversi,
 # aumentarlo/diminuirlo nel tempo, e in futuro (Fase 7, Modulo G) aggiornarlo
 # automaticamente in base ai P&L realizzati (change_type='realized_pnl').
-FALLBACK_CAPITAL_EUR = 1000
+FALLBACK_CAPITAL_EUR = REFERENCE_CAPITAL_EUR   # solo se capital_state e' VUOTA; un errore di lettura NON usa il ripiego
+
+
+class CapitalUnavailable(RuntimeError):
+    pass
 
 
 def get_current_capital():
-    """Legge il capitale corrente da capital_state (riga più recente per timestamp).
-    Fail-open: se la tabella è vuota o la query fallisce, usa FALLBACK_CAPITAL_EUR
-    e stampa un avviso esplicito - non blocca il job, ma il valore usato è
-    tracciabile nei log."""
+    """Legge il capitale corrente da capital_state (riga piu' recente). [Passo 3] Tabella vuota = capitale di riferimento
+    (1.000 EUR, avviso nel log). Errore di lettura = CapitalUnavailable: E si ferma con errore, nessun segnale viene valutato
+    su un capitale presunto."""
     try:
         response = (supabase.table('capital_state')
                     .select('capital_eur, created_at')
                     .order('created_at', desc=True)
                     .limit(1)
                     .execute())
-        if response.data:
-            capital = float(response.data[0]['capital_eur'])
-            return capital
-        print(f"⚠️ capital_state vuota, uso fallback €{FALLBACK_CAPITAL_EUR}")
-        return FALLBACK_CAPITAL_EUR
     except Exception as e:
-        print(f"⚠️ Errore lettura capital_state: {e} — uso fallback €{FALLBACK_CAPITAL_EUR}")
-        return FALLBACK_CAPITAL_EUR
+        raise CapitalUnavailable(f"lettura capital_state fallita: {e}")
+    if response.data:
+        return float(response.data[0]['capital_eur'])
+    print(f"⚠️ capital_state vuota, uso il capitale di riferimento €{FALLBACK_CAPITAL_EUR}")
+    return FALLBACK_CAPITAL_EUR
 
 
 def get_broker_costs(broker='Alpaca', mercato='USA'):
@@ -147,29 +142,18 @@ def get_ticker_sector_and_liquidity(ticker):
         return None, None
 
 
-def calculate_operation_cost(price, quantity, costs, liquidity_bucket):
-    """[Sezione 12] Aggiunge lo slippage per fascia di liquidità al costo base."""
-    commission_fixed = costs['commissione_fissa']
-    commission_variable = price * quantity * costs['commissione_percentuale']
-    spread_cost = price * quantity * costs['spread_medio_percentuale']
-    bollo = price * quantity * costs['bollo_percentuale']
+def calculate_expected_return(price, confidence_multiplier, atr, costs, quantity, liquidity_bucket, target_price=None):
+    """[Passo 3] Rendimento atteso coerente con livelli e costi reali.
+    - mossa attesa = distanza dal prezzo di ingresso di dimensionamento (R + 0,5 ATR, con slippage) al TARGET effettivo del
+      segnale; se il target manca, ripiego storico 2*ATR;
+    - costi = ANDATA E RITORNO (commissione fissa x2, commissione %, spread, bollo e slippage su entrambi i lati);
+    - lordo = mossa/ingresso x confidence_multiplier (1.0/0.7/0.4, Sezione 11), netto = lordo - costi - riserva fiscale."""
+    entry = entry_reference_price(price, atr, liquidity_bucket)
+    expected_move = (float(target_price) - entry) if target_price is not None and float(target_price) > entry else atr * 2
+    expected_gross_return = (expected_move / entry) * confidence_multiplier
 
-    slippage_pct = SLIPPAGE_BY_LIQUIDITY.get(liquidity_bucket, DEFAULT_SLIPPAGE)
-    slippage_cost = price * quantity * slippage_pct
-
-    total_cost = commission_fixed + commission_variable + spread_cost + bollo + slippage_cost
-    return total_cost, slippage_pct
-
-
-def calculate_expected_return(price, confidence_multiplier, atr, costs, quantity, liquidity_bucket):
-    """[v5.1.1] confidence_multiplier sostituisce il vecchio uso diretto di
-    confidence_score come moltiplicatore grezzo - ora viene dalla mappatura
-    esplicita di Sezione 11 (alto/medio/basso -> 1.0/0.7/0.4)."""
-    expected_move = atr * 2
-    expected_gross_return = (expected_move / price) * confidence_multiplier
-
-    total_cost, slippage_pct = calculate_operation_cost(price, quantity, costs, liquidity_bucket)
-    cost_percent = total_cost / (price * quantity)
+    total_cost, slippage_pct = round_trip_cost(entry, quantity, costs, liquidity_bucket)
+    cost_percent = total_cost / (entry * quantity)
 
     expected_net_return = expected_gross_return - cost_percent
     tax_reserve = expected_net_return * costs['tassazione_plusvalenza_percentuale'] if expected_net_return > 0 else 0
@@ -198,31 +182,6 @@ def get_usd_per_eur():
     return None
 
 
-def calculate_position_size(entry_price, invalidation_price, capital, risk_percent=RISK_PER_TRADE_PERCENT):
-    """
-    [Sezione 13 - SOSTITUISCE la vecchia formula capitale*2%/(ATR*2)]
-
-    size = (capitale * rischio_max_per_trade%) / (prezzo_entrata - prezzo_stop)
-
-    A differenza della vecchia formula (basata solo su ATR), qui la
-    distanza reale dallo stop (invalidation_price di Modulo B, Sezione 14)
-    determina la size: due titoli con lo stesso ATR ma stop tecnici a
-    distanze diverse ricevono size diverse, riflettendo il rischio vero.
-    """
-    if invalidation_price is None:
-        return None  # niente stima arbitraria: se manca il dato, il segnale va saltato
-
-    stop_distance = abs(entry_price - invalidation_price)
-    if stop_distance <= 0:
-        return None
-
-    max_risk_eur = capital * risk_percent
-    return max_risk_eur / stop_distance
-
-
-# [NUOVO 07/10] Esposizione e limite per settore sulle posizioni ATTIVE, non sui segnali storici.
-# Prima si sommavano i BUY approvati negli ultimi 10 giorni: contavano anche segnali scaduti, mai entrati o
-# gia' chiusi (21 BUY su 21 bloccati in una settimana con il portafoglio vuoto). Fonte attuale: i cicli di T.
 # Quando il portafoglio paper sara' collegato (FASE 5) bastera' cambiare QUESTA funzione: una sola fonte autorevole.
 ACTIVE_CYCLE_STATES = ('ENTRY_PENDING', 'ACTIVE', 'EXIT_PENDING')   # capitale impegnato (un WATCH non ha comprato nulla)
 RACE_WINDOW_MINUTES = 30      # BUY approvati da E da meno di 30 min che T non ha ancora trasformato in ciclo
@@ -258,39 +217,39 @@ def get_active_exposure_items():
 
 
 def check_sector_concentration(ticker, sector, lookback_days, max_per_sector):
-    """[v5.1.1] Settore da ticker_sectors (tutto l'universo). [07/10] Si contano le posizioni ATTIVE del settore
-    (vedi get_active_exposure_items), non i BUY approvati degli ultimi giorni. lookback_days non e' piu' usato."""
+    """[Passo 3 - P1-6] FAIL-CLOSED. Ritorna (ok, conteggio, motivo_di_blocco).
+    Settore sconosciuto o controllo non eseguibile = NON ok (il BUY viene bloccato) con il motivo esplicito.
+    Si contano le posizioni ATTIVE del settore (get_active_exposure_items); lookback_days non e' piu' usato."""
     if not sector:
-        return True, 0  # settore sconosciuto (es. BPSO.MI): fail-open, non blocca
-
+        return False, 0, f"Settore non riconosciuto per {ticker}: concentrazione non verificabile"
     try:
-        same_sector = (supabase.table('ticker_sectors')
-                       .select('ticker')
-                       .eq('sector', sector)
-                       .execute())
+        same_sector = (supabase.table('ticker_sectors').select('ticker').eq('sector', sector).execute())
         sector_tickers = {r['ticker'] for r in (same_sector.data or [])}
         if not sector_tickers:
-            return True, 0
+            return False, 0, f"Settore '{sector}' senza ticker in ticker_sectors: concentrazione non verificabile"
         held = {i['ticker'] for i in get_active_exposure_items() if i['ticker'] in sector_tickers}
         count = len(held)
-        return count < max_per_sector, count
+        if count >= max_per_sector:
+            return False, count, f"Concentrazione settoriale: già {count} posizioni in '{sector}' (max {max_per_sector})"
+        return True, count, None
     except Exception as e:
-        print(f"⚠️ Errore controllo concentrazione settore {sector}: {e}")
-        return True, 0
+        print(f"❌ Errore controllo concentrazione settore {sector}: {e}")
+        return False, 0, f"Controllo concentrazione settoriale NON eseguibile ({e}): BUY bloccato"
 
 
 def check_portfolio_exposure(new_position_eur, capital, lookback_days, max_exposure_percent):
-    """[Sezione 15] Esposizione totale = capitale impegnato dalle posizioni ATTIVE (vedi get_active_exposure_items)
-    piu' la nuova candidata, rispetto al capitale corrente. [07/10] Non somma piu' i segnali storici; lookback_days non
-    e' piu' usato. Fail-open come il controllo di concentrazione settoriale: errore -> non blocca il job."""
+    """[Passo 3 - P1-6] FAIL-CLOSED. Ritorna (ok, esposizione_pct, motivo_di_blocco). Esposizione = capitale impegnato dalle
+    posizioni attive piu' la nuova candidata, rispetto al capitale. Errore di lettura = NON ok, motivo esplicito."""
     try:
         existing_exposure = sum(i['eur'] for i in get_active_exposure_items())
         total_exposure = existing_exposure + (new_position_eur or 0)
         exposure_pct = total_exposure / capital if capital else 1.0
-        return exposure_pct <= max_exposure_percent, exposure_pct
+        if exposure_pct > max_exposure_percent:
+            return False, exposure_pct, f"Esposizione di portafoglio stimata {exposure_pct:.0%} > soglia {max_exposure_percent:.0%}"
+        return True, exposure_pct, None
     except Exception as e:
-        print(f"⚠️ Errore controllo esposizione di portafoglio: {e}")
-        return True, 0.0
+        print(f"❌ Errore controllo esposizione di portafoglio: {e}")
+        return False, 0.0, f"Controllo esposizione NON eseguibile ({e}): BUY bloccato"
 
 
 def get_screening_candidates_map(candidate_ids):
@@ -397,6 +356,7 @@ def filter_signals(tickers_filter=None):
             print("✅ Nessun segnale nuovo da valutare")
             return
 
+        control_failures, write_failures = [], 0
         costs_by_market = get_costs_by_market()
         if not any(costs_by_market.values()):
             print("❌ Costi broker non configurati")
@@ -405,7 +365,11 @@ def filter_signals(tickers_filter=None):
         # Letto una sola volta per run (non per singolo segnale): il capitale
         # non cambia nel corso di un'esecuzione di 2-3 minuti, e così si evita
         # una query Supabase per ogni ticker.
-        current_capital = get_current_capital()
+        try:
+            current_capital = get_current_capital()
+        except CapitalUnavailable as e:
+            print(f"❌ {e}: nessun segnale valutato (fail-closed)")
+            return 1
         print(f"💰 Capitale corrente: €{current_capital:,.2f}")
 
         # [Sezione 16 - NUOVO 16/09] Batch fetch di anomaly_score/context_score
@@ -444,22 +408,22 @@ def filter_signals(tickers_filter=None):
                     print(f"⚠️ {ticker}: cambio USD/EUR non disponibile, salto (ritentato al prossimo run)")
                     continue
                 fx_to_eur = 1.0 / usd_per_eur
-            capital_local = current_capital / fx_to_eur
-            quantity = calculate_position_size(price, invalidation_price, capital_local)
-            if quantity is None and signal['action'] != 'HOLD':
-                print(f"⚠️ {ticker}: manca invalidation_price, impossibile dimensionare - salto")
-                continue
-            quantity = quantity or 0
-            countervalue_eur = quantity * price * fx_to_eur
-            if countervalue_eur > current_capital:  # mai oltre il capitale disponibile
-                quantity = capital_local / price
-                countervalue_eur = current_capital
-            position_size = round(countervalue_eur, 2) if quantity else None  # EUR (vedi check_portfolio_exposure)
             costs = costs_by_market.get(market_for_ticker(ticker))
             if not costs:
                 print(f"⚠️ {ticker}: costi di mercato {market_for_ticker(ticker)} non configurati - salto (ritentato al prossimo run)")
                 continue
-            returns = calculate_expected_return(price, confidence_multiplier, atr, costs, max(quantity, 1), liquidity_bucket)
+            if invalidation_price is None and signal['action'] != 'HOLD':
+                print(f"⚠️ {ticker}: manca invalidation_price, impossibile dimensionare - salto")
+                continue
+            # [Passo 3 - P1-7] stessa funzione di Modulo T: prezzo R + 0,5 ATR, costi andata/ritorno inclusi nel rischio, quantita' intera
+            sizing = size_position(price, atr, invalidation_price, current_capital, fx_to_eur, costs, liquidity_bucket)
+            quantity = sizing['quantity'] if sizing else 0
+            if sizing is None and signal['action'] != 'HOLD':
+                print(f"⚠️ {ticker}: stop non sotto il prezzo di ingresso, impossibile dimensionare - salto")
+                continue
+            countervalue_eur = sizing['countervalue_eur'] if sizing else 0.0
+            position_size = countervalue_eur if quantity else None  # EUR (vedi check_portfolio_exposure)
+            returns = calculate_expected_return(price, confidence_multiplier, atr, costs, max(quantity, 1), liquidity_bucket, target_price)
 
             threshold_net = 0.005
             filter_passed = returns['expected_net_return'] > threshold_net and signal['action'] != 'HOLD'
@@ -471,30 +435,28 @@ def filter_signals(tickers_filter=None):
 
             sector_count = 0
             exposure_pct = 0.0
+            if filter_passed and filtered_action == 'BUY' and quantity < 1:
+                filter_passed, filtered_action = False, 'HOLD'
+                filter_reason = "Quantita' < 1 azione con il rischio per operazione (costi inclusi)"
             if filter_passed and filtered_action == 'BUY':
-                sector_ok, sector_count = check_sector_concentration(
+                sector_ok, sector_count, block_reason = check_sector_concentration(
                     ticker, sector, SECTOR_EXPOSURE_LOOKBACK_DAYS, MAX_POSITIONS_PER_SECTOR
                 )
                 if not sector_ok:
-                    filter_passed = False
-                    filtered_action = 'HOLD'
-                    filter_reason = f"Concentrazione settoriale: già {sector_count} posizioni in '{sector}' (max {MAX_POSITIONS_PER_SECTOR})"
+                    filter_passed, filtered_action, filter_reason = False, 'HOLD', block_reason
+                    if block_reason and 'NON eseguibile' in block_reason or 'non riconosciuto' in (block_reason or ''):
+                        control_failures.append(f"{ticker}: {block_reason}")
 
-            # [Sezione 15 - NUOVO 16/09] Esposizione totale stimata di portafoglio,
-            # controllata solo se il segnale è ancora BUY dopo il filtro settoriale.
+            # [Sezione 15] Esposizione totale stimata, solo se il segnale e' ancora BUY dopo il filtro settoriale. FAIL-CLOSED.
             if filter_passed and filtered_action == 'BUY':
-                new_position_eur = countervalue_eur
-                exposure_ok, exposure_pct = check_portfolio_exposure(
-                    new_position_eur, current_capital, SECTOR_EXPOSURE_LOOKBACK_DAYS,
+                exposure_ok, exposure_pct, block_reason = check_portfolio_exposure(
+                    countervalue_eur, current_capital, SECTOR_EXPOSURE_LOOKBACK_DAYS,
                     MAX_PORTFOLIO_EXPOSURE_PERCENT
                 )
                 if not exposure_ok:
-                    filter_passed = False
-                    filtered_action = 'HOLD'
-                    filter_reason = (
-                        f"Esposizione di portafoglio stimata {exposure_pct:.0%} "
-                        f"> soglia {MAX_PORTFOLIO_EXPOSURE_PERCENT:.0%}"
-                    )
+                    filter_passed, filtered_action, filter_reason = False, 'HOLD', block_reason
+                    if 'NON eseguibile' in (block_reason or ''):
+                        control_failures.append(f"{ticker}: {block_reason}")
 
             # [Sezione 16 - NUOVO 16/09] Ranking, solo per opportunità
             # ancora BUY/SELL dopo tutti i filtri di Sezione 12+15.
@@ -543,14 +505,21 @@ def filter_signals(tickers_filter=None):
                     print(f"ℹ️ {ticker}: già valutato da un altro run (vincolo di unicità), salto")
                     continue
                 print(f"❌ {ticker}: scrittura signals_filtered fallita: {e} - ritentato al prossimo run")
+                write_failures += 1
                 continue
 
             status = "✅ APPROVATO" if filter_passed else f"❌ DECLASSATO ({filter_reason})"
             rank_info = f" | rank={final_rank_score}" if final_rank_score is not None else ""
             print(f"{ticker}: {signal['action']} → {filtered_action} {status}{rank_info}")
 
+        for msg in control_failures:
+            print(f"❌ CONTROLLO DI RISCHIO FALLITO (BUY bloccato): {msg}")
+        print(f"✅ E: controlli di rischio falliti={len(control_failures)}, scritture fallite={write_failures}")
+        return 1 if (control_failures or write_failures) else 0
+
     except Exception as e:
         print(f"❌ Errore filtro costi: {e}")
+        return 1
 
 
 if __name__ == "__main__":
@@ -565,4 +534,4 @@ if __name__ == "__main__":
         tickers_filter = [t for t, m in metadata.items() if m['market'] == args.market]
 
     print(f"🚀 Modulo E - Cost Filter ({args.market}): {datetime.now(timezone.utc).isoformat()}")
-    filter_signals(tickers_filter=tickers_filter)
+    sys.exit(filter_signals(tickers_filter=tickers_filter) or 0)

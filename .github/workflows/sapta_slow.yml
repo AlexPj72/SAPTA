@@ -47,6 +47,7 @@ jobs:
         run: python src/modulo_b_analysis.py
 
       - name: Run Modulo E - Cost Filter
+        if: ${{ !cancelled() }}  # [Passo 3] E parte anche se H2/B escono con errore (errori visibili, catena non interrotta)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
