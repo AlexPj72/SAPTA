@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notifications
 from market_calendar import (BAR_MINUTES, CalendarNotVerified, currency_of, is_regular_bar, last_regular_bar_start,
 
-                             local_date, market_of, next_session_close, nth_session_date)
+                             local_date, market_of, next_session_close, nth_session_date, session_bounds)
 
 
 def _fromiso(s):
@@ -49,6 +49,7 @@ MAX_HOLD_SESSIONS = 5              # REGOLA PROVVISORIA di paper trading, NON ca
 FRESHNESS_MINUTES = 30             # regola F: un ingresso e' azionabile solo se la candela e' fresca
 EXPIRY_GRACE_MINUTES = 20          # scadenza per tempo: aspetta che arrivino le ultime candele (Borsa Italiana in ritardo)
 BAR_CLOSED_GRACE_SECONDS = 60      # una candela e' chiusa se la sua fine + 60 s e' passata
+GAP_GRACE_MINUTES = 45             # [Passo 2] una candela mancante si attende fino a 45 min dalla sua fine (A la ricopre al run successivo); poi e' "assenza alla fonte"
 COHERENCE_TOLERANCE = 0.005        # R-INV = 1,5A e TGT-R = 3A, tolleranza 0,5% del prezzo
 RISK_PER_TRADE_PERCENT = 0.01      # stessa formula di Modulo E (1% del capitale / distanza dallo stop)
 PORTFOLIO_CODE = 'PORTAFOGLIO_AI'   # FASE 5: il portafoglio virtuale gestito in automatico dall'IA (solo paper)
@@ -108,6 +109,12 @@ def make_bar(row):
 def bar_payload(bar):
     return {'o': bar['o'], 'h': bar['h'], 'l': bar['l'], 'c': bar['c'], 'v': bar['v'], 'flag': bar['flag'],
             'start': _iso(bar['start']), 'end': _iso(bar['end'])}
+
+
+def bar_is_actionable(bar):
+    """[Passo 2] Una candela puo' far scattare invalidazione, STOP, TARGET, TEMPO o SEGNALE solo se il dato e' valido:
+    flag 'ok' e volume > 0. Una candela senza scambi (O=H=L=C, volume 0) o con dato non affidabile non e' un prezzo eseguibile."""
+    return bar['flag'] == 'ok' and bar['v'] > 0
 
 
 def entry_eligible(bar, now):
@@ -346,6 +353,21 @@ class Store:
         cur = self._t('trade_lifecycle').select('*').eq('id', lc['id']).execute().data[0]
         return cur                                         # gia' transitato (altro run): niente da fare
 
+    def record_event(self, lc, event_key, event_type, bar, reason, now, price=None):
+        """[Passo 2] Evento SENZA cambio di stato (trattenuta per dato non valido, buco di dati). Idempotente (UNIQUE ciclo+chiave).
+        Ritorna True se l'evento e' nuovo."""
+        ev = {'lifecycle_id': lc['id'], 'event_key': event_key, 'event_type': event_type, 'from_state': lc['state'],
+              'to_state': lc['state'], 'reason': reason, 'bar_start': _iso(bar['start']) if bar else None,
+              'bar_end': _iso(bar['end']) if bar else None, 'price': price, 'detected_at': _iso(now),
+              'payload': {'bar': bar_payload(bar) if bar else None}}
+        try:
+            self._t('trade_events').insert(ev).execute()
+            return True
+        except Exception as e:
+            if _is_unique_violation(e):
+                return False
+            raise
+
     def update(self, lc, fields):
         self._t('trade_lifecycle').update(dict(fields, updated_at=_iso(datetime.now(timezone.utc)))).eq('id', lc['id']).execute()
         return dict(lc, **fields)
@@ -413,6 +435,7 @@ class Engine:
         self.fx_provider, self._fx = fx_provider, 'unset'
         self.c = {'n_signals_new': 0, 'n_created': 0, 'n_skipped': 0, 'n_evaluated': 0, 'n_transitions': 0, 'n_pending_retry': 0}
         self.notes = []
+        self.data_stats = {'barre_non_valide': 0, 'trattenute': 0, 'buchi_in_attesa': 0, 'buchi_accettati': 0}   # [Passo 2] solo nelle note del run
         self.failed_now = set()
 
     def usd_per_eur(self):
@@ -487,18 +510,64 @@ class Engine:
                 self.notes.append(f"{lc['ticker']}: {e}")
                 self.log(f"⚠️ {lc['ticker']}: {e}")
 
+    def _expected_starts(self, market, floor_start, closed_by):
+        """[Passo 2] Inizi di candela regolari attesi tra floor_start e closed_by (calendario del mercato)."""
+        out, d = [], local_date(market, floor_start)
+        last_day = local_date(market, closed_by)
+        while d <= last_day:
+            b = session_bounds(market, d)
+            if b:
+                t = b[0]
+                while t < b[1]:
+                    if floor_start <= t <= closed_by:
+                        out.append(t)
+                    t += timedelta(minutes=BAR_MINUTES)
+            d += timedelta(days=1)
+        return out
+
     def _bars_after(self, lc, floor_start):
+        """Candele CHIUSE e regolari successive a last_bar_start, in ordine, senza saltare buchi (Passo 2).
+        Una candela mancante si attende GAP_GRACE_MINUTES dalla sua fine (A la ricopre al run successivo): fino ad allora la
+        valutazione si ferma PRIMA del buco (nessun livello viene giudicato senza aver visto tutte le candele). Passato il
+        periodo e' un'assenza alla fonte (nessuno scambio): si registra l'evento e si prosegue. Un buco IN CODA (nessuna
+        candela successiva) non e' ancora un'assenza: si attende senza registrare nulla."""
         last = parse_ts(lc.get('last_bar_start'))
         market = lc['market']
         closed_by = self.now - timedelta(minutes=BAR_MINUTES, seconds=BAR_CLOSED_GRACE_SECONDS)
+        have = {b['start']: b for b in self.store.bars(lc['ticker'], floor_start)}
         out = []
-        for b in self.store.bars(lc['ticker'], floor_start):
-            if b['start'] < floor_start or (last and b['start'] <= last) or b['start'] > closed_by:
+        for t in self._expected_starts(market, floor_start, closed_by):
+            if last and t <= last:
                 continue
-            if not is_regular_bar(market, b['start']):
+            b = have.get(t)
+            if b is not None:
+                out.append(b)
                 continue
-            out.append(b)
+            age = (self.now - (t + timedelta(minutes=BAR_MINUTES))).total_seconds() / 60
+            if not any(k > t for k in have):               # buco IN CODA: nessuna candela dopo, A non ha ancora scritto: si attende
+                break
+            if age < GAP_GRACE_MINUTES:
+                self.data_stats['buchi_in_attesa'] += 1
+                self.log(f"⏳ {lc['ticker']}: candela {t:%Y-%m-%d %H:%M} UTC mancante, attendo (valutazione ferma prima del buco)")
+                break
+            self.data_stats['buchi_accettati'] += 1
+            if not self.dry_run:
+                self.store.record_event(lc, f'DATA_GAP:{_iso(t)}', 'DATA_GAP', {'start': t, 'end': t + timedelta(minutes=BAR_MINUTES),
+                                        'o': 0, 'h': 0, 'l': 0, 'c': 0, 'v': 0, 'flag': 'missing'},
+                                        'candela assente alla fonte dopo il periodo di attesa: nessuno scambio presunto', self.now)
         return out
+
+    def _hold(self, lc, bar, what):
+        """[Passo 2] Una regola avrebbe scattato su una candela NON valida: nessuna transizione, evento + nota visibile."""
+        self.data_stats['barre_non_valide'] += 1
+        self.data_stats['trattenute'] += 1
+        text = (f"DATI: {what} su candela {bar['start']:%H:%M} UTC non valida (flag {bar['flag']}, volume {bar['v']}): "
+                "nessuna azione, attendo una candela valida")
+        self.log(f"🛑 {lc['ticker']}: {text}")
+        if self.dry_run:
+            return dict(lc, last_note=text)
+        self.store.record_event(lc, f"DATA_HOLD:{what}:{_iso(bar['start'])}", 'DATA_HOLD', bar, text, self.now)
+        return self.store.update(lc, {'last_note': text, 'last_bar_start': _iso(bar['start'])})
 
     def _delay(self, bar):
         return max(0, int((self.now - bar['end']).total_seconds() // 60))
@@ -509,6 +578,14 @@ class Engine:
         for bar in self._bars_after(lc, parse_ts(lc['created_at'])):
             if bar['start'] >= valid_until:                # W1
                 break
+            if not bar_is_actionable(bar):             # [Passo 2] dato non valido: niente invalidazione, trigger o stato
+                k0, r0 = watch_rule(lc, bar)
+                if k0 == 'INVALIDATED':
+                    lc = self._hold(lc, bar, f'WATCH_{r0}')
+                else:
+                    self.data_stats['barre_non_valide'] += 1
+                    lc = self._persist(lc, {'last_bar_start': _iso(bar['start'])})
+                continue
             kind, reason = watch_rule(lc, bar)
             if kind == 'INVALIDATED':
                 self._apply(lc, f'INVALIDATED:{reason}', 'INVALIDATED', 'INVALIDATED',
@@ -623,6 +700,15 @@ class Engine:
         for bar in self._bars_after(lc, entry_end):           # solo candele successive a quella di ingresso
             sess = local_date(market, bar['start'])
             sessions = self._sessions_elapsed(lc, sess)
+            if not bar_is_actionable(bar):             # [Passo 2] dato non valido: nessuna uscita (STOP/TARGET/TEMPO/SEGNALE)
+                h0 = active_rule(lc, bar)
+                tempo0 = sess == planned_exit and bar['start'] == last_regular_bar_start(market, sess)
+                if h0 or tempo0:
+                    lc = self._hold(lc, bar, f"EXIT_{h0[0] if h0 else 'TEMPO'}")
+                else:
+                    self.data_stats['barre_non_valide'] += 1
+                    lc = self._persist(lc, {'last_bar_start': _iso(bar['start']), 'sessions_elapsed': sessions})
+                continue
             hit = active_rule(lc, bar)
             reason, level = (hit if hit else (None, None))
             if not reason and sess > planned_exit:             # A5 con dati mancanti: prima candela dopo la scadenza
@@ -635,7 +721,10 @@ class Engine:
             if reason:
                 self.c['n_transitions'] += 0
                 return self._start_exit(lc, bar, reason, level, sessions, sell)
-            lc = self._persist(lc, {'last_bar_start': _iso(bar['start']), 'sessions_elapsed': sessions})
+            fields = {'last_bar_start': _iso(bar['start']), 'sessions_elapsed': sessions}
+            if str(lc.get('last_note') or '').startswith('DATI:'):
+                fields['last_note'] = None             # [Passo 2] arrivata una candela valida: la trattenuta e' risolta
+            lc = self._persist(lc, fields)
         return lc
 
     def _sessions_elapsed(self, lc, sess_date):
@@ -804,7 +893,7 @@ def main():
     print(f"Modulo T - state machine (paper: operazioni virtuali sul portafoglio IA, nessun ordine reale) | now={now:%Y-%m-%d %H:%M} UTC")
     try:
         counters = eng.run()
-        eng.store.run_finish(run_id, 'OK', counters, notes={'note': eng.notes[:20], 'alerts': eng.alert_stats})
+        eng.store.run_finish(run_id, 'OK', counters, notes={'note': eng.notes[:20], 'alerts': eng.alert_stats, 'dati': eng.data_stats})
         print(f"✅ T completato: {counters} | alert: {eng.alert_stats}")
         if EXECUTOR_MODE == 'PORTFOLIO' and not args.dry_run:
             snapshot_if_due(supabase, now)
