@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 import yfinance as yf
 
 from bar_ingestion_core import (BAR_MINUTES, SETTLE_MINUTES, build_records, coverage, frame_rows, new_counters)
+from bar_freshness import parse_ts
 from config import supabase
 from universe import get_universe
 
@@ -87,8 +88,8 @@ def fetch_provisional_keys(client, since, now):
         page = (client.table('prezzi').select('ticker,timestamp,created_at').eq('interval', '15m').like('ticker', '%.MI')
                 .gte('timestamp', since.isoformat()).order('timestamp').range(offset, offset + 999).execute().data or [])
         for r in page:
-            start = datetime.fromisoformat(r['timestamp']).astimezone(timezone.utc)
-            created = datetime.fromisoformat(r['created_at']).astimezone(timezone.utc)
+            start = parse_ts(r['timestamp'])          # tollerante: Supabase puo' restituire frazioni di secondo di 5 cifre (Python 3.10)
+            created = parse_ts(r['created_at'])
             if created - (start + timedelta(minutes=BAR_MINUTES)) < timedelta(minutes=SETTLE_MINUTES['EU']):
                 keys.add((r['ticker'], start.isoformat()))
         if len(page) < 1000:
