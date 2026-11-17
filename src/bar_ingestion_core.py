@@ -16,10 +16,15 @@ from market_calendar import BAR_MINUTES, CalendarNotVerified, is_regular_bar, se
 
 CLOSE_GRACE_SECONDS = 60
 STALE_INGESTION_MINUTES = 30      # ritardo (dalla FINE della barra) oltre il quale una barra "live" e' marcata stale: massimo 30 minuti
+# Il feed Yahoo Italia consegna prima una barra PROVVISORIA (volume parziale o zero) e la completa dopo circa 15 minuti: misurato il
+# 16-17/11/2026, barre EU acquisite entro 3 minuti dalla chiusura = volume mediano 0,11x della media storica (0,49x se acquisite dopo
+# 10-20 minuti) e 32% a volume zero. Con l'upsert ignore_duplicates la barra provvisoria resterebbe congelata: in modalita' live una
+# barra si scrive solo quando il suo mercato ha 'assestato' il dato. USA: dato definitivo alla chiusura (0 minuti).
+SETTLE_MINUTES = {'EU': 15, 'USA': 0}
 LIVE_WINDOW_MINUTES = 180         # una barra e' "live" se la sua fine e' piu' recente di questa finestra; piu' vecchia = recupero
 PRICE_TOL = 1e-6
 
-COUNTER_KEYS = ('scaricate', 'scartate_nan', 'scartate_non_regolari', 'scartate_in_formazione',
+COUNTER_KEYS = ('scaricate', 'scartate_nan', 'scartate_non_regolari', 'scartate_in_formazione', 'trattenute_non_assestate', 'riparate',
                 'calendario_non_verificato', 'da_scrivere', 'inserite', 'duplicate',
                 'errori_download', 'errori_scrittura', 'ticker_senza_dati')
 
@@ -82,6 +87,9 @@ def build_records(ticker, rows, now, live, counters):
         bar_end = start + timedelta(minutes=BAR_MINUTES)
         if bar_end + timedelta(seconds=CLOSE_GRACE_SECONDS) > now:
             counters['scartate_in_formazione'] += 1
+            continue
+        if live and now - bar_end < timedelta(minutes=SETTLE_MINUTES.get(market, 0)):
+            counters['trattenute_non_assestate'] += 1     # dato ancora provvisorio: si scrive al run successivo (A riscarica 2 giorni)
             continue
         v = float(v) if _isnum(v) else None
         flag = classify_bar(float(o), float(h), float(l), float(c), v, bar_end, now, live)

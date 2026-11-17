@@ -6,6 +6,9 @@ on:
       period:
         description: 'Periodo 15m da recuperare (max 60d su Yahoo), es. 5d'
         default: '5d'
+      mode:
+        description: "Modalità del Modulo A: vuoto = automatica (live se periodo <= 5d), live, backfill oppure repair (aggiorna SOLO le barre EU scritte prima che il dato fosse assestato)"
+        default: ''
 
 jobs:
   backfill:
@@ -24,6 +27,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           A_PERIOD: ${{ github.event.inputs.period || '5d' }}
+          A_MODE: ${{ github.event.inputs.mode || '' }}
         run: python src/modulo_a_ingestion.py
       - name: Quotazioni giornaliere (ultimi 5 giorni)
         if: ${{ !cancelled() }}
