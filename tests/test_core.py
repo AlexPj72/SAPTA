@@ -18,11 +18,29 @@ def rec(ticker, start, now, live=True, o=10, h=10.5, l=9.8, c=10.2, v=1000):
 
 # --- barre chiuse / in formazione -------------------------------------------------
 def test_barra_in_formazione_scartata_e_chiusa_scritta():
-    start = dt(2026, 11, 13, 13, 45)            # EU, 13:45-14:00 UTC
-    out, cnt = rec('ENI.MI', start, dt(2026, 11, 13, 14, 0, 30))
+    start = dt(2026, 11, 13, 13, 45)            # 13:45-14:00 UTC
+    out, cnt = rec('AAPL', dt(2026, 11, 13, 14, 30), dt(2026, 11, 13, 14, 45, 30))    # USA, 14:30-14:45, chiusa da 30 s
     assert out == [] and cnt['scartate_in_formazione'] == 1
-    out, cnt = rec('ENI.MI', start, dt(2026, 11, 13, 14, 1, 0))   # chiusa da 60 s
-    assert len(out) == 1 and cnt['scartate_in_formazione'] == 0
+    out, cnt = rec('AAPL', dt(2026, 11, 13, 14, 30), dt(2026, 11, 13, 14, 46, 0))     # USA: chiusa da 60 s -> si scrive subito
+    assert len(out) == 1 and cnt['trattenute_non_assestate'] == 0
+
+
+def test_barra_eu_trattenuta_finche_il_dato_non_e_assestato():
+    start = dt(2026, 11, 13, 13, 45)
+    out, cnt = rec('ENI.MI', start, dt(2026, 11, 13, 14, 2))                           # 2 minuti dopo la chiusura: provvisoria
+    assert out == [] and cnt['trattenute_non_assestate'] == 1
+    out, cnt = rec('ENI.MI', start, dt(2026, 11, 13, 14, 14, 59))                      # 14:59 minuti: ancora trattenuta
+    assert out == [] and cnt['trattenute_non_assestate'] == 1
+    out, cnt = rec('ENI.MI', start, dt(2026, 11, 13, 14, 15, 0))                       # 15 minuti: scritta
+    assert len(out) == 1 and cnt['trattenute_non_assestate'] == 0
+    out, cnt = rec('ENI.MI', start, dt(2026, 11, 13, 14, 2), live=False)               # backfill: nessuna attesa
+    assert len(out) == 1
+
+
+def test_assestamento_solo_in_modalita_live_e_per_mercato():
+    import bar_ingestion_core as c
+    assert c.SETTLE_MINUTES == {'EU': 15, 'USA': 0}
+    assert c.SETTLE_MINUTES['EU'] <= 30 and c.SETTLE_MINUTES['USA'] <= 30
 
 
 # --- calendario --------------------------------------------------------------------
