@@ -96,3 +96,11 @@ def test_individua_le_chiavi_provvisorie_dal_ritardo_di_acquisizione():
             {'ticker': 'TEN.MI', 'timestamp': START.isoformat(), 'created_at': (end + timedelta(minutes=14.9)).isoformat()}]       # al limite: provvisoria
     keys = A.fetch_provisional_keys(_C(rows), START - timedelta(days=1), dt(2026, 11, 13, 12))
     assert keys == {('ENI.MI', START.isoformat()), ('TEN.MI', START.isoformat())}
+
+
+def test_timestamp_supabase_con_frazioni_irregolari():
+    end = START + timedelta(minutes=15)
+    rows = [{'ticker': 'ENI.MI', 'timestamp': '2026-11-13T09:00:00+00:00', 'created_at': '2026-11-13T09:16:38.11709+00:00'},    # 5 cifre: provvisoria
+            {'ticker': 'ISP.MI', 'timestamp': '2026-11-13T09:00:00+00:00', 'created_at': '2026-11-13T09:31:02.5+00:00'}]       # 1 cifra: assestata
+    keys = A.fetch_provisional_keys(_C(rows), START - timedelta(days=1), dt(2026, 11, 13, 12))
+    assert keys == {('ENI.MI', START.isoformat())}
