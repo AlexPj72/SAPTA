@@ -27,12 +27,11 @@ import yfinance as yf
 from bar_ingestion_core import (BAR_MINUTES, SETTLE_MINUTES, build_records, coverage, frame_rows, new_counters)
 from bar_freshness import parse_ts
 from config import supabase
-from universe import get_universe
+from universe import INDEX_TICKERS, get_universe
 
 TICKERS = get_universe()
 
-# Indici di riferimento (contesto di mercato per AI Watch). Fuori da TICKERS: non entrano in H1/H2.
-INDEX_TICKERS = ['^GSPC', 'FTSEMIB.MI']  # S&P 500 (USA), FTSE MIB (Italia)
+# Indici di riferimento: definiti in universe.INDEX_TICKERS (fuori da TICKERS: non entrano in H1/H2).
 
 A_PERIOD = os.environ.get('A_PERIOD', '2d')
 A_MODE = os.environ.get('A_MODE', '')  # '' = automatico (live se periodo <= 5 giorni), 'live', 'backfill' oppure 'repair'
