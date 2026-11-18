@@ -30,7 +30,7 @@ from urllib.parse import quote
 import requests
 import yfinance as yf
 from config import supabase
-from bar_freshness import is_bar_fresh, parse_ts
+from bar_freshness import is_bar_fresh, is_valid_bar, parse_ts
 from universe import get_universe
 
 WEIGHTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scoring_weights_v1.json')
@@ -80,16 +80,6 @@ def get_ticker_meta_map():
     except Exception as e:
         print(f"⚠️ Errore lettura ticker_sectors: {e}")
         return {}
-
-
-def is_valid_bar(bar):
-    """[Passo 3 - P1-2] Barra utilizzabile per baseline e confronto: flag 'ok' (o assente) e volume > 0.
-    Le barre stale, zero_volume o feed_error non entrano ne' nella baseline ne' come barra corrente."""
-    try:
-        volume = float(bar.get('volume') or 0)
-    except (TypeError, ValueError):
-        return False
-    return bar.get('data_quality_flag') in (None, 'ok') and volume > 0
 
 
 def compute_intraday_anomaly(bars, volume_threshold, price_threshold):
