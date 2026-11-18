@@ -30,7 +30,7 @@ from urllib.parse import quote
 import requests
 import yfinance as yf
 from config import supabase
-from bar_freshness import is_bar_fresh
+from bar_freshness import is_bar_fresh, parse_ts
 from universe import get_universe
 
 WEIGHTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scoring_weights_v1.json')
@@ -272,6 +272,30 @@ def get_country_for_ticker(ticker):
     return "Italy" if ticker.endswith(".MI") else "United States"
 
 
+DAILY_CLOSES_LOOKBACK = 320
+
+
+def get_daily_closes(ticker):
+    """[Passo 3] Serie delle chiusure giornaliere per il context score: PRIMA dallo storico interno ('prezzi', interval 1d, gia'
+    caricato e aggiornato), cosi' H2 non dipende da Yahoo a ogni ciclo; Yahoo (300 giorni) SOLO se lo storico interno e'
+    insufficiente (meno di H2_MIN_DAILY_BARS_FOR_TREND barre). None se nessuna delle due fonti basta."""
+    import pandas as pd
+    try:
+        rows = (supabase.table('prezzi').select('timestamp,close').eq('ticker', ticker).eq('interval', '1d')
+                .order('timestamp', desc=True).limit(DAILY_CLOSES_LOOKBACK).execute().data or [])
+        by_day = {str(r['timestamp'])[:10]: float(r['close']) for r in rows if r.get('close') is not None}
+        if len(by_day) >= H2_MIN_DAILY_BARS_FOR_TREND:
+            return pd.Series([by_day[d] for d in sorted(by_day)])
+        print(f"ℹ️ {ticker}: storico daily interno insufficiente ({len(by_day)} barre), ripiego su Yahoo")
+    except Exception as e:
+        print(f"⚠️ {ticker}: lettura storico daily interno fallita ({e}), ripiego su Yahoo")
+    df = yf.download(ticker, period="300d", interval="1d", auto_adjust=True, progress=False)
+    if df.empty or len(df) < H2_MIN_DAILY_BARS_FOR_TREND:
+        return None
+    close = df['Close']
+    return close.iloc[:, 0] if hasattr(close, 'columns') else close
+
+
 def compute_context_score(ticker):
     """
     [Sezione 7] Trend (SMA200, SMA50 vs SMA200) + distanza da massimi/minimi.
@@ -284,11 +308,10 @@ def compute_context_score(ticker):
     sarà caricato, per evitare la chiamata yfinance ripetuta ogni ciclo.
     """
     try:
-        df = yf.download(ticker, period="300d", interval="1d", auto_adjust=True, progress=False)
-        if df.empty or len(df) < H2_MIN_DAILY_BARS_FOR_TREND:
-            return None  # storico insufficiente per SMA200, non si inventa un valore
+        close = get_daily_closes(ticker)
+        if close is None:
+            return None  # storico insufficiente per SMA200 (Supabase e ripiego Yahoo), non si inventa un valore
 
-        close = df['Close']
         sma50 = float(close.rolling(50).mean().iloc[-1])
         sma200 = float(close.rolling(200).mean().iloc[-1])
         current = float(close.iloc[-1])
@@ -316,27 +339,47 @@ def compute_context_score(ticker):
         return None
 
 
+H2_CANDIDATE_MAX_AGE_MINUTES = 120   # [Passo 3] un candidato H1 e' valido per H2 per 2 ore; oltre e' 'scaduto_h2' (tracciato, non perso in silenzio)
+
+
 def run_h2():
     """H2. [Passo 3 - P1-1] Promuove a B SOLO i candidati che superano davvero le soglie H2 (is_anomaly: volume >= 5x e
     movimento >= 3%, su barre valide e fresche) e dispongono di un context_score. Tra questi si prendono i primi H2_TOP_N.
     Chi non supera le soglie e' 'scartato_h2'. I problemi tecnici (dati non utilizzabili, errore sul contesto) NON
     promuovono: il candidato resta 'h1_candidate' (verra' riprovato al run successivo) e il problema e' scritto nel log;
     se ci sono errori tecnici il processo termina con codice 1 (visibile nel workflow)."""
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    now = datetime.now(timezone.utc)
     try:
         response = (supabase.table('screening_candidates')
-                    .select('id, ticker')
+                    .select('id, ticker, timestamp')
                     .eq('status', 'h1_candidate')
-                    .gte('timestamp', today_start)
                     .execute())
-        rows = response.data or []
+        all_rows = response.data or []
     except Exception as e:
         print(f"❌ Errore lettura screening_candidates: {e}")
         return 1
 
+    # Regola di scadenza esplicita: nessun candidato resta bloccato 'h1_candidate' per sempre ne' viene ripreso a distanza di giorni.
+    rows, expired = [], []
+    for r in all_rows:
+        try:
+            age_min = (now - parse_ts(r['timestamp'])).total_seconds() / 60
+        except Exception:
+            age_min = float('inf')
+        (rows if age_min <= H2_CANDIDATE_MAX_AGE_MINUTES else expired).append(r)
+    expire_errors = 0
+    for r in expired:
+        try:
+            supabase.table('screening_candidates').update({'status': 'scaduto_h2'}).eq('id', r['id']).execute()
+        except Exception as e:
+            expire_errors += 1
+            print(f"❌ H2 {r['ticker']}: impossibile marcare come scaduto ({e})")
+    if expired:
+        print(f"⌛ H2: {len(expired) - expire_errors} candidati scaduti (oltre {H2_CANDIDATE_MAX_AGE_MINUTES} min) marcati 'scaduto_h2'")
+
     if not rows:
-        print("⚠️ Nessun candidato H1 da processare oggi")
-        return 0
+        print("⚠️ Nessun candidato H1 valido da processare")
+        return 1 if expire_errors else 0
 
     enriched, rejected, waiting, errors = [], [], [], []
     for row in rows:
@@ -405,7 +448,7 @@ def run_h2():
         print(f"❌ H2 {t}: errore tecnico, non promosso ({why})")
     print(f"✅ H2: {len(rows)} candidati H1; {len(promoted_ids)} promossi a B, {len(enriched) - len(promoted_ids)} oltre il limite "
           f"H2_TOP_N, {len(rejected)} sotto soglia, {len(waiting)} in attesa dati, {len(errors)} errori tecnici")
-    return 1 if errors else 0
+    return 1 if (errors or expire_errors) else 0
 
 
 if __name__ == "__main__":

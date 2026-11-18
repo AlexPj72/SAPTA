@@ -67,7 +67,8 @@ class _Q:
 
 class FakeSB:
     def __init__(self, tickers):
-        self.rows = [{'id': i + 1, 'ticker': t} for i, t in enumerate(tickers)]
+        recent = (datetime.now(U) - timedelta(minutes=10)).isoformat()
+        self.rows = [{'id': i + 1, 'ticker': t, 'timestamp': recent} for i, t in enumerate(tickers)]
         self.updates = {}
     def table(self, name): return _Q(self)
 
@@ -115,3 +116,73 @@ def test_h2_dati_insufficienti_o_non_freschi_non_promuovono(monkeypatch):
 def test_h2_ultima_barra_non_valida_non_promuove(monkeypatch):
     sb, code = run_h2(monkeypatch, {'AAA': series(last_volume=0, last_close=105.0)})
     assert sb.updates == {}
+
+
+# ---------------------------------------------------------------- backlog e scadenza
+def test_h2_candidati_scaduti_vengono_marcati_e_non_processati(monkeypatch):
+    sb = FakeSB(['AAA', 'BBB'])
+    sb.rows[0]['timestamp'] = (datetime.now(U) - timedelta(days=30)).isoformat()                  # candidato del mese scorso
+    sb.rows[1]['timestamp'] = (datetime.now(U) - timedelta(minutes=H.H2_CANDIDATE_MAX_AGE_MINUTES + 1)).isoformat()
+    monkeypatch.setattr(H, 'supabase', sb)
+    monkeypatch.setattr(H, 'get_recent_bars', lambda t, n: series(last_volume=7000, last_close=105.0))
+    monkeypatch.setattr(H, 'compute_context_score', lambda t: 0.5)
+    monkeypatch.setattr(H, 'fetch_news_light_count', lambda t: 0)
+    monkeypatch.setattr(H, 'is_bar_fresh', lambda t, ts: True)
+    assert H.run_h2() == 0
+    assert sb.updates == {1: {'status': 'scaduto_h2'}, 2: {'status': 'scaduto_h2'}}
+
+
+def test_h2_riprende_i_candidati_di_ieri_ancora_entro_la_scadenza(monkeypatch):
+    sb = FakeSB(['AAA'])
+    sb.rows[0]['timestamp'] = (datetime.now(U) - timedelta(minutes=H.H2_CANDIDATE_MAX_AGE_MINUTES - 1)).isoformat()   # attraversa la mezzanotte
+    monkeypatch.setattr(H, 'supabase', sb)
+    monkeypatch.setattr(H, 'get_recent_bars', lambda t, n: series(last_volume=7000, last_close=105.0))
+    monkeypatch.setattr(H, 'compute_context_score', lambda t: 0.5)
+    monkeypatch.setattr(H, 'fetch_news_light_count', lambda t: 0)
+    monkeypatch.setattr(H, 'is_bar_fresh', lambda t, ts: True)
+    H.run_h2()
+    assert sb.updates[1]['status'] == 'promosso_a_B'
+
+
+# ---------------------------------------------------------------- context score dallo storico interno
+class _DailySB:
+    def __init__(self, n, price=100.0):
+        self.rows = [{'timestamp': (datetime(2026, 1, 1, tzinfo=U) + timedelta(days=i)).isoformat(), 'close': price + i * 0.1}
+                     for i in range(n)][::-1]               # decrescente come la query
+    def table(self, n): return self
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def order(self, *a, **k): return self
+    def limit(self, *a, **k): return self
+    def execute(self):
+        class R: pass
+        r = R(); r.data = self.rows; return r
+
+
+def test_context_score_usa_lo_storico_interno_senza_yahoo(monkeypatch):
+    monkeypatch.setattr(H, 'supabase', _DailySB(300))
+    def boom(*a, **k): raise AssertionError('Yahoo non deve essere chiamato')
+    monkeypatch.setattr(H.yf, 'download', boom, raising=False)
+    monkeypatch.setattr(H, 'fetch_gdelt_tone', lambda c: 0.0)
+    monkeypatch.setattr(H, 'get_country_for_ticker', lambda t: 'US')
+    score = H.compute_context_score('AAA')
+    assert score is not None and -1.5 <= score <= 1.5
+
+
+def test_context_score_ripiega_su_yahoo_solo_se_lo_storico_e_insufficiente(monkeypatch):
+    import pandas as pd
+    calls = []
+    def fake_download(t, **k):
+        calls.append(t); return pd.DataFrame({'Close': [100 + 0.1 * i for i in range(300)]})
+    monkeypatch.setattr(H, 'supabase', _DailySB(50))
+    monkeypatch.setattr(H.yf, 'download', fake_download, raising=False)
+    monkeypatch.setattr(H, 'fetch_gdelt_tone', lambda c: 0.0)
+    monkeypatch.setattr(H, 'get_country_for_ticker', lambda t: 'US')
+    assert H.compute_context_score('AAA') is not None and calls == ['AAA']
+
+
+def test_context_score_none_se_nessuna_fonte_basta(monkeypatch):
+    import pandas as pd
+    monkeypatch.setattr(H, 'supabase', _DailySB(50))
+    monkeypatch.setattr(H.yf, 'download', lambda t, **k: pd.DataFrame({'Close': [1.0] * 10}), raising=False)
+    assert H.compute_context_score('AAA') is None
