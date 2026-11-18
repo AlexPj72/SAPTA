@@ -48,6 +48,13 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python src/modulo_h_anomaly.py --stage=h1
 
+      - name: Run Modulo H - Contesto e promozione (H2, subito dopo H1)
+        if: ${{ !cancelled() }}   # [Passo 3] H2 parte subito dopo H1 nello stesso ciclo: i candidati appena creati non aspettano il giro Slow (errore di H2 visibile, catena non interrotta)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python src/modulo_h_anomaly.py --stage=h2
+
       - name: Run Modulo AI Watch - Ipotesi qualitative + alert (NUOVO 18/09)
         if: ${{ !cancelled() }}   # [Passo 1] idem: AI Watch non salta se A fallisce (la freschezza delle barre e' controllata in lettura)
         env:
