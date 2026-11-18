@@ -55,6 +55,10 @@ UNIVERSE_IT = {
     # "TGYM.MI" e "TPRO.MI" rispettivamente — verificare e reinserire.
 }
 
+# Indici di riferimento (contesto di mercato, Relative Strength, verifiche EOD): NON fanno parte dell'universo operativo (nessun
+# segnale, nessun H1/H2) ma i loro dati 15m e giornalieri vanno tenuti aggiornati. Unica definizione, usata da A e dall'aggiornamento daily.
+INDEX_TICKERS = ['^GSPC', 'FTSEMIB.MI']  # S&P 500 (USA), FTSE MIB (Italia)
+
 UNIVERSE_FULL = list(dict.fromkeys(
     list(UNIVERSE_USA) + list(UNIVERSE_IT)
 ))
