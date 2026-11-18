@@ -89,3 +89,52 @@ def test_soglia_di_freschezza_massimo_30_minuti_dalla_fine_della_barra():
     assert not is_bar_fresh('ENI.MI', start, dt(2026, 11, 13, 12, 31))    # 31 minuti
     from bar_freshness import FRESHNESS_MAX_MINUTES
     assert FRESHNESS_MAX_MINUTES <= 30
+
+
+# ---------------------------------------------------------------- AI Watch: stesso criterio di H1
+def _row(minutes_ago_start, volume, flag='ok', close=100.0):
+    return {'timestamp': (dt(2026, 11, 13, 12, 5) - timedelta(minutes=minutes_ago_start)).isoformat(), 'close': close, 'volume': volume,
+            'data_quality_flag': flag}
+
+
+def _watch_rows(monkeypatch, rows_newest_first):
+    now = dt(2026, 11, 13, 12, 5)
+    db = FakeSupabase()
+    db.tables['prezzi'] = [dict(r, ticker='ENI.MI') for r in rows_newest_first]
+    db.tables['ticker_sectors'] = [{'ticker': 'ENI.MI', 'sector': 'Energy'}]
+    monkeypatch.setattr(W, 'supabase', db)
+    monkeypatch.setattr(W, 'is_bar_fresh', lambda t, ts: is_bar_fresh(t, ts, now))
+    return W.get_universe_metrics()
+
+
+def _base(n_valid=12, last_volume=6000, last_close=104.0):
+    rows = [_row(20, last_volume, close=last_close)]                       # barra corrente (fine 12:00)
+    rows += [_row(35 + 15 * i, 1000) for i in range(n_valid)]               # baseline valida
+    return rows
+
+
+def test_ai_watch_baseline_ignora_barre_zero_volume_e_non_ok(monkeypatch):
+    pulite = _watch_rows(monkeypatch, _base())
+    sporche_rows = _base()
+    sporche_rows[3:3] = [_row(40, 0, 'zero_volume'), _row(45, 0, 'zero_volume'), _row(50, 99999, 'stale')]
+    sporche = _watch_rows(monkeypatch, sporche_rows)
+    assert len(pulite) == len(sporche) == 1
+    assert pulite[0]['volume_ratio'] == sporche[0]['volume_ratio'] == 6.0
+    assert W.LAST_METRICS_STATS['barre_escluse'] == 3 and W.LAST_METRICS_STATS['ticker_valutati'] == 1
+
+
+def test_ai_watch_conta_barre_usate_e_scartate(monkeypatch):
+    _watch_rows(monkeypatch, _base())
+    assert W.LAST_METRICS_STATS['barre_usate'] == 13 and W.LAST_METRICS_STATS['barre_escluse'] == 0
+
+
+def test_ai_watch_barra_corrente_non_valida_o_poche_valide_escludono_il_ticker(monkeypatch):
+    rows = _base(); rows[0]['volume'] = 0
+    assert _watch_rows(monkeypatch, rows) == [] and W.LAST_METRICS_STATS['ticker_senza_barra_valida_fresca'] == 1
+    rows = [_row(20, 6000)] + [_row(35 + 15 * i, 1000) for i in range(3)] + [_row(80 + 15 * i, 0, 'zero_volume') for i in range(10)]
+    assert _watch_rows(monkeypatch, rows) == [] and W.LAST_METRICS_STATS['ticker_dati_insufficienti'] == 1
+
+
+def test_criterio_di_validita_unico_tra_h1_e_ai_watch():
+    import bar_freshness
+    assert H.is_valid_bar is bar_freshness.is_valid_bar and W.is_valid_bar is bar_freshness.is_valid_bar

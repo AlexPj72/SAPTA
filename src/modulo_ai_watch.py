@@ -43,7 +43,7 @@ from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 import requests
 from config import supabase, GEMINI_API_KEY
-from bar_freshness import is_bar_fresh
+from bar_freshness import is_bar_fresh, is_valid_bar
 from universe import get_universe
 from market_context import get_market_direction, market_direction_label, get_sector_strength
 
@@ -82,6 +82,9 @@ ALERT_EMAIL_TO = os.environ.get("ALERT_EMAIL_TO", "")
 DASHBOARD_BASE_URL = "https://www.pujia.it/sapta"
 
 
+LAST_METRICS_STATS = {}   # [Passo 3] barre usate/escluse nell'ultimo calcolo (anche nel log)
+
+
 def get_universe_metrics():
     """Stessa metrica di H1 (volume_ratio, price_change su bar 15m), ma per
     OGNI ticker con dati sufficienti - non solo quelli sopra soglia."""
@@ -109,16 +112,24 @@ def get_universe_metrics():
     sector_map = {r['ticker']: r.get('sector') or '—' for r in (sectors_resp.data or [])}
 
     metrics = []
+    stats = {'ticker_valutati': 0, 'barre_usate': 0, 'barre_escluse': 0, 'ticker_senza_barra_valida_fresca': 0, 'ticker_dati_insufficienti': 0}
     for t, bars in by_ticker.items():
         if len(bars) < H1_MIN_BARS_FOR_BASELINE:
+            stats['ticker_dati_insufficienti'] += 1
             continue
         last_bar = bars[0]
-        if last_bar.get('data_quality_flag') not in (None, 'ok'):
-            continue  # stessa regola di H1: scarta se l'ultima barra non è affidabile (es. mercato chiuso)
-        # [PASSO 1 - 14/11/2026] freschezza calcolata in lettura (calendario di mercato), non piu' affidata al flag
-        if not is_bar_fresh(t, last_bar.get('timestamp')):
+        # [PASSO 3] stesso criterio di H1: barra corrente valida (flag ok, volume > 0) E fresca (calendario di mercato)
+        if not is_valid_bar(last_bar) or not is_bar_fresh(t, last_bar.get('timestamp')):
+            stats['ticker_senza_barra_valida_fresca'] += 1
             continue
-        baseline = bars[1:]
+        # baseline SOLO su barre valide; le escluse sono contate
+        baseline = [b for b in bars[1:] if is_valid_bar(b)]
+        stats['barre_escluse'] += len(bars) - 1 - len(baseline)
+        if len(baseline) + 1 < H1_MIN_BARS_FOR_BASELINE:
+            stats['ticker_dati_insufficienti'] += 1
+            continue
+        stats['ticker_valutati'] += 1
+        stats['barre_usate'] += len(baseline) + 1
         avg_vol = sum((b.get('volume') or 0) for b in baseline) / len(baseline) if baseline else 0
         if not avg_vol or last_bar.get('close') is None or baseline[-1].get('close') is None:
             continue
@@ -132,6 +143,9 @@ def get_universe_metrics():
             'price_change_pct': round(price_change_pct, 2),
             'last_price': last_bar['close'],  # [NUOVO 19/09] prezzo assoluto al momento dell'alert, serve al Modulo EOD Verify
         })
+    LAST_METRICS_STATS.clear()
+    LAST_METRICS_STATS.update(stats)
+    print(f"📊 AI Watch metriche: {stats}")
     return metrics
 
 

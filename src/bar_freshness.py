@@ -19,6 +19,15 @@ from market_calendar import BAR_MINUTES, CalendarNotVerified, is_regular_bar
 FRESHNESS_MAX_MINUTES = 30   # [15/11 -> 16/11] massimo 30 minuti dalla FINE della barra (le barre restano a 15 minuti); oltre = problema di alimentazione, non barra fresca
 
 
+def is_valid_bar(bar):
+    """Barra utilizzabile per baseline e confronti: flag 'ok' (o assente) e volume > 0. Criterio UNICO di H1/H2 e AI Watch."""
+    try:
+        volume = float(bar.get('volume') or 0)
+    except (TypeError, ValueError):
+        return False
+    return bar.get('data_quality_flag') in (None, 'ok') and volume > 0
+
+
 def parse_ts(value):
     """Timestamp ISO di Supabase (anche con frazioni di secondo irregolari, 'Z') -> datetime UTC."""
     if isinstance(value, datetime):
