@@ -27,6 +27,7 @@ Fail-open: un ticker senza dati sufficienti viene saltato, non blocca gli
 altri.
 """
 from datetime import datetime, timezone
+from bar_ingestion_core import market_for
 from config import supabase
 
 
@@ -50,6 +51,25 @@ def get_closes_for_date(target_date):
         if t and row.get('close') is not None:
             closes[t] = float(row['close'])  # un solo bar giornaliero per ticker per data, non serve dedup
     return closes
+
+
+def classify_missing(hypotheses, closes, target_date):
+    """[Passo 3 - P1-8] Distingue, tra le ipotesi senza chiusura, quelle IN ATTESA (la chiusura giornaliera di quel MERCATO non e'
+    ancora arrivata: verranno riprese automaticamente al giro successivo, perche' get_pending_dates le rilista) da quelle NON
+    VERIFICABILI (il mercato ha la chiusura di quel giorno ma non questo ticker, oppure manca l'entry_price).
+    Ritorna ({'in_attesa': [ticker], 'non_verificabili': [ticker]})."""
+    market_has_close = {market_for(t) for t in closes}
+    waiting, unverifiable = [], []
+    for h in hypotheses:
+        if h.get('entry_price') is None:
+            unverifiable.append(h['ticker'])
+        elif h['ticker'] in closes:
+            continue
+        elif market_for(h['ticker']) in market_has_close:
+            unverifiable.append(h['ticker'])
+        else:
+            waiting.append(h['ticker'])
+    return {'in_attesa': waiting, 'non_verificabili': unverifiable}
 
 
 def get_pending_dates():
@@ -97,8 +117,11 @@ def run_eod_verify_for_date(target_date):
 
     closes = get_closes_for_date(target_date)
     if not closes:
-        print(f"   Nessuna chiusura disponibile per il {target_date}, riprovo al prossimo giro utile.")
+        print(f"   Nessuna chiusura disponibile per il {target_date}: {len(hypotheses)} ipotesi IN ATTESA, riprovo al prossimo giro utile.")
         return
+    missing = classify_missing(hypotheses, closes, target_date)
+    print(f"   Senza chiusura: {len(missing['in_attesa'])} in attesa (mercato non ancora chiuso/caricato), "
+          f"{len(missing['non_verificabili'])} non verificabili {missing['non_verificabili'][:10]}")
 
     stats = {'totale': 0, 'confermata': 0}
     per_tipo = {'prezzo': [0, 0], 'volume': [0, 0], 'debole': [0, 0]}  # [totale, confermata]
