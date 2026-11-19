@@ -222,3 +222,41 @@ def test_pazienza_sui_buchi_massimo_30_minuti():
     eng = engine(bars, dt(2026, 11, 13, 9, 16))               # 31 minuti: assenza alla fonte, si prosegue con evento
     assert [b['start'].strftime('%H:%M') for b in eng._bars_after(watch_lc(), dt(2026, 11, 13, 7, 55))] == ['08:00', '08:15', '08:45']
     assert any(k[1].startswith('DATA_GAP') for k in eng.store.events)
+
+
+# ------------------------------------------------------------------ segnali scaduti
+class _SigStore(StubStore):
+    def __init__(self, sigs):
+        super().__init__([]); self.sigs, self.created = sigs, []
+    def new_approved_signals(self, since): return self.sigs
+    def raw(self, rid): return {'close_price': 100.0, 'atr': 2.0}
+    def open_ticker(self, ticker): return None
+    def insert_lifecycle(self, row): self.created.append(row); return dict(row, id=len(self.created))
+    def _t(self, name):
+        class Q:
+            def insert(s, *a, **k): return s
+            def execute(s): return None
+        return Q()
+
+
+def _sig(rid, ts, action='BUY'):
+    return {'id': rid, 'raw_signal_id': rid, 'ticker': 'ENI.MI', 'filtered_action': action, 'timestamp': ts, 'invalidation_price': 97.0,
+            'target_price': 106.0, 'slippage_applied_percent': 0.0005, 'liquidity_bucket': 'LIQ_HIGH'}
+
+
+def test_segnale_scaduto_non_rientra_nel_ciclo_ordinario():
+    eng = engine([], dt(2026, 11, 16, 10, 0))
+    eng.store = _SigStore([_sig(1, '2026-11-12T10:00:00+00:00'),            # giovedi' scorso: scaduto da giorni
+                           _sig(2, '2026-11-16T09:30:00+00:00')])           # di oggi: valido
+    eng.executor = type('E', (), {'name': 'NOT_LINKED'})()
+    eng.create_lifecycles()
+    assert [r['raw_signal_id'] for r in eng.store.created] == [2]
+    assert eng.data_stats['scaduti_ignorati'] == 1
+    assert eng.c['n_skipped'] == 0 and eng.c['n_signals_new'] == 1 and not eng.notes   # nessun rumore ne' log per lo scaduto
+
+
+def test_segnale_sell_ignorato_senza_contarlo_come_nuovo():
+    eng = engine([], dt(2026, 11, 16, 10, 0))
+    eng.store = _SigStore([_sig(3, '2026-11-16T09:30:00+00:00', 'SELL')])
+    eng.create_lifecycles()
+    assert eng.store.created == [] and eng.data_stats['sell_ignorati'] == 1 and eng.c['n_signals_new'] == 0
