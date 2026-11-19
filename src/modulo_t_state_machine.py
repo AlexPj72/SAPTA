@@ -445,7 +445,7 @@ class Engine:
         self.fx_provider, self._fx = fx_provider, 'unset'
         self.c = {'n_signals_new': 0, 'n_created': 0, 'n_skipped': 0, 'n_evaluated': 0, 'n_transitions': 0, 'n_pending_retry': 0}
         self.notes = []
-        self.data_stats = {'barre_non_valide': 0, 'trattenute': 0, 'buchi_in_attesa': 0, 'buchi_accettati': 0}   # [Passo 2] solo nelle note del run
+        self.data_stats = {'barre_non_valide': 0, 'trattenute': 0, 'buchi_in_attesa': 0, 'buchi_accettati': 0, 'scaduti_ignorati': 0, 'sell_ignorati': 0}   # [Passo 2] solo nelle note del run
         self.failed_now = set()
 
     def usd_per_eur(self):
@@ -457,11 +457,20 @@ class Engine:
     def create_lifecycles(self):
         since = self.now - timedelta(days=SIGNAL_LOOKBACK_DAYS)
         for sig in self.store.new_approved_signals(since):
-            self.c['n_signals_new'] += 1
             ticker = sig['ticker']
             if sig['filtered_action'] == 'SELL':
-                self.c['n_skipped'] += 1          # D1: SELL = uscita di un titolo in portafoglio, mai un nuovo ciclo (nessuno short)
+                self.data_stats['sell_ignorati'] += 1   # D1: SELL = uscita di un titolo in portafoglio, mai un nuovo ciclo (nessuno short)
                 continue
+            # [Passo 3] un segnale gia' scaduto NON rientra piu' nel ciclo ordinario: niente log ne' conteggi a ogni run (prima veniva
+            # rielencato e 'saltato' per tutta la finestra SIGNAL_LOOKBACK_DAYS). La traccia resta nel segnale stesso (signals_filtered)
+            # e nel contatore 'scaduti_ignorati' delle note del run.
+            try:
+                if next_session_close(market_of(ticker), parse_ts(sig['timestamp'])) + timedelta(minutes=EXPIRY_GRACE_MINUTES) <= self.now:
+                    self.data_stats['scaduti_ignorati'] += 1
+                    continue
+            except CalendarNotVerified:
+                pass                                   # il ramo sotto lo segnala esplicitamente (CALENDARIO NON VERIFICATO)
+            self.c['n_signals_new'] += 1
             raw = self.store.raw(sig['raw_signal_id'])
             if not raw or raw.get('atr') in (None, 0) or raw.get('close_price') is None:
                 self._skip(sig, 'segnale grezzo incompleto'); continue
