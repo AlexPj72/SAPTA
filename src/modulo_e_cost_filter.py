@@ -35,6 +35,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from config import supabase
+from fx import FxRateUnavailable, rate_for_date, reference_date
 from sizing import (DEFAULT_SLIPPAGE, REFERENCE_CAPITAL_EUR, RISK_PER_TRADE_PERCENT, SLIPPAGE_BY_LIQUIDITY,  # noqa: F401
                     calculate_operation_cost, entry_reference_price, round_trip_cost, size_position)
 
@@ -166,20 +167,13 @@ def calculate_expected_return(price, confidence_multiplier, atr, costs, quantity
     }
 
 
-def get_usd_per_eur():
-    """[FIX 30/09 - handoff Codex] Dollari per 1 EUR (Yahoo EURUSD=X, ultima
-    chiusura disponibile). NON e' un feed FX tick-by-tick: cambio indicativo,
-    non operativo real-time. None se non disponibile/non plausibile."""
-    try:
-        import yfinance as yf
-        hist = yf.Ticker('EURUSD=X').history(period='5d')['Close'].dropna()
-        fx = float(hist.iloc[-1])
-        if 0.5 < fx < 2.0:
-            return fx
-        print(f"⚠️ Cambio EURUSD non plausibile: {fx}")
-    except Exception as e:
-        print(f"⚠️ Cambio EURUSD non disponibile: {e}")
-    return None
+def fx_to_eur_for_signal(signal, cache):
+    """[fx_rates] EUR per 1 USD per questo segnale: tasso BCE in vigore per la data del segnale (ultimo con data < data del segnale).
+    Stessa data e stessa riga che T ritrova da lifecycle.created_at. Una lettura per data (cache). FxRateUnavailable se manca: E si ferma."""
+    ref = reference_date(signal['timestamp'])
+    if ref not in cache:
+        cache[ref] = rate_for_date(supabase, ref)
+    return cache[ref].eur_per_unit
 
 
 # Quando il portafoglio paper sara' collegato (FASE 5) bastera' cambiare QUESTA funzione: una sola fonte autorevole.
@@ -378,10 +372,9 @@ def filter_signals(tickers_filter=None):
                           if s.get('screening_candidate_id')}
         candidates_map = get_screening_candidates_map(candidate_ids)
 
-        # [FIX 30/09] Cambio USD/EUR letto una sola volta, solo se serve.
+        # [fx_rates] Cambio USD/EUR dai tassi BCE (un solo tasso per giornata, lo stesso di T). Nessun ripiego su altre fonti.
         from universe import UNIVERSE_USA
-        usd_per_eur = get_usd_per_eur() if any(
-            s_['ticker'] in UNIVERSE_USA for s_ in signals_to_process) else None
+        fx_cache = {}
 
         for signal in signals_to_process:
             ticker = signal['ticker']
@@ -404,10 +397,11 @@ def filter_signals(tickers_filter=None):
             # Capitale in EUR, prezzo nella valuta del titolo (USD per USA).
             fx_to_eur = 1.0  # EUR per 1 unita' di valuta del prezzo
             if ticker in UNIVERSE_USA:
-                if not usd_per_eur:
-                    print(f"⚠️ {ticker}: cambio USD/EUR non disponibile, salto (ritentato al prossimo run)")
-                    continue
-                fx_to_eur = 1.0 / usd_per_eur
+                try:
+                    fx_to_eur = fx_to_eur_for_signal(signal, fx_cache)
+                except FxRateUnavailable as e:
+                    print(f"❌ {ticker}: cambio BCE non disponibile ({e}). E SI FERMA: nessun segnale USD viene dimensionato con un cambio diverso")
+                    return 1
             costs = costs_by_market.get(market_for_ticker(ticker))
             if not costs:
                 print(f"⚠️ {ticker}: costi di mercato {market_for_ticker(ticker)} non configurati - salto (ritentato al prossimo run)")
