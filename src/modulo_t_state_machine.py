@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notifications
+from fx import FxRateUnavailable, rate_for_date, reference_date
 from sizing import REFERENCE_CAPITAL_EUR, RISK_PER_TRADE_PERCENT, ZONE_ATR_FRACTION, size_position   # noqa: F401  (dimensionamento condiviso con E)
 from market_calendar import (BAR_MINUTES, CalendarNotVerified, currency_of, is_regular_bar, last_regular_bar_start,
 
@@ -211,9 +212,11 @@ class PortfolioExecutor:
                 at, bar_start, delay = lc['trigger_bar_end'], lc['trigger_bar_start'], lc.get('trigger_delay_minutes')
             else:
                 price, fx = float(lc['exit_price']), float(lc['fx_eur_per_local'])
-                if lc['currency'] == 'USD' and self.fx_usd_per_eur:
-                    u = self.fx_usd_per_eur()
-                    fx = (1.0 / u) if u else fx
+                if lc['currency'] == 'USD':
+                    # [fx_rates] cambio BCE del giorno dell'uscita; nessun ripiego (l'eccezione blocca l'operazione: ExecResult FAILED)
+                    if not self.fx_usd_per_eur:
+                        raise FxRateUnavailable('provider del cambio non configurato')
+                    fx = 1.0 / self.fx_usd_per_eur(reference_date(lc['exit_detected_at']))
                 ref = price / (1 - slip) if slip < 1 else price
                 at, bar_start, delay = lc['exit_bar_end'], lc['exit_bar_start'], lc.get('exit_delay_minutes')
             fees = self._fees(lc['market'], qty * price * fx)
@@ -421,37 +424,30 @@ class Store:
                                           error=error, notes=notes)).eq('id', run_id).execute()
 
 
-def get_usd_per_eur():
-    """Dollari per 1 EUR (Yahoo EURUSD=X): cambio indicativo, non real-time. None se non disponibile."""
-    try:
-        import yfinance as yf
-        hist = yf.Ticker('EURUSD=X').history(period='5d')['Close'].dropna()
-        fx = float(hist.iloc[-1])
-        return fx if 0.5 < fx < 2.0 else None
-    except Exception as e:
-        print(f"⚠️ cambio EURUSD non disponibile: {e}")
-        return None
-
-
-# ---------------------------------------------------------------- logica del ciclo
 class Engine:
-    def __init__(self, sb, now, executor=None, dry_run=False, fx_provider=get_usd_per_eur, log=print, senders=None):
+    def __init__(self, sb, now, executor=None, dry_run=False, fx_provider=None, log=print, senders=None):
         self.store, self.now, self.dry_run, self.log = Store(sb), now, dry_run, log
         # senders: {'TELEGRAM': fn(subject, text) -> (stato, errore), 'EMAIL': ...}: iniettabili nei test
         self.senders = senders or {'TELEGRAM': lambda subject, text: notifications.send_telegram(text),
                                    'EMAIL': lambda subject, text: notifications.send_email(subject, text)}
         self.alert_stats = {'enqueued': 0, 'sent': 0, 'failed': 0, 'expired': 0, 'given_up': 0, 'not_configured': 0}
         self.executor = executor or NotLinkedExecutor()
-        self.fx_provider, self._fx = fx_provider, 'unset'
+        # [fx_rates] cambio BCE unico per giornata (stessa riga di E); nessuna altra fonte. fx_provider(data) -> USD per 1 EUR o FxRateUnavailable
+        self.fx_provider = fx_provider or (lambda ref_date: rate_for_date(self.sb, ref_date).rate)
+        self.fx_errors = []
         self.c = {'n_signals_new': 0, 'n_created': 0, 'n_skipped': 0, 'n_evaluated': 0, 'n_transitions': 0, 'n_pending_retry': 0}
         self.notes = []
         self.data_stats = {'barre_non_valide': 0, 'trattenute': 0, 'buchi_in_attesa': 0, 'buchi_accettati': 0, 'scaduti_ignorati': 0, 'sell_ignorati': 0}   # [Passo 2] solo nelle note del run
         self.failed_now = set()
 
-    def usd_per_eur(self):
-        if self._fx == 'unset':
-            self._fx = self.fx_provider()
-        return self._fx
+    def usd_per_eur(self, ref_date):
+        """USD per 1 EUR (tasso BCE in vigore per ref_date). Solleva FxRateUnavailable: nessun ripiego."""
+        return self.fx_provider(reference_date(ref_date))
+
+    def _fx_error(self, lc, err):
+        msg = f"{lc['ticker']}: cambio BCE non disponibile ({err})"
+        self.fx_errors.append(msg)
+        self.log(f"❌ {msg}")
 
     # -- creazione ------------------------------------------------------------------
     def create_lifecycles(self):
@@ -663,9 +659,11 @@ class Engine:
         market, currency = lc['market'], lc['currency']
         fx_eur_per_local = 1.0
         if currency == 'USD':
-            usd_per_eur = self.usd_per_eur()
-            if not usd_per_eur:
-                return self._note(lc, bar, 'ingresso rimandato: cambio USD/EUR non disponibile', retry=True)
+            try:
+                usd_per_eur = self.usd_per_eur(lc['created_at'])          # data del segnale = stessa riga usata da E
+            except FxRateUnavailable as e:
+                self._fx_error(lc, e)
+                return self._note(lc, bar, f'ingresso rimandato: cambio BCE non disponibile ({e})', retry=True)
             fx_eur_per_local = 1.0 / usd_per_eur
         fill = bar['c'] * (1 + float(lc['slippage_pct'] or 0))
         cash = self.store.portfolio_cash()
@@ -767,8 +765,11 @@ class Engine:
     def _start_exit(self, lc, bar, reason, level, sessions, sell=None):
         fx = lc['fx_eur_per_local']
         if lc['currency'] == 'USD':
-            u = self.usd_per_eur()
-            fx = (1.0 / u) if u else lc['fx_eur_per_local']      # senza cambio aggiornato: quello dell'ingresso
+            try:
+                fx = 1.0 / self.usd_per_eur(self.now)                 # cambio BCE del giorno dell'uscita
+            except FxRateUnavailable as e:
+                self._fx_error(lc, e)                                 # niente ripiego sul cambio d'ingresso: uscita rimandata, errore visibile
+                return self._note(lc, bar, f'USCITA RIMANDATA: cambio BCE non disponibile ({e})', retry=True)
         fill = sell_fill(level, float(lc['slippage_pct'] or 0))
         pnl_eur, pnl_pct = pnl(lc, fill, float(fx))
         updates = {'exit_bar_start': _iso(bar['start']), 'exit_bar_end': _iso(bar['end']), 'exit_detected_at': _iso(self.now),
@@ -915,15 +916,19 @@ def main():
     executor = PortfolioExecutor(supabase) if EXECUTOR_MODE == 'PORTFOLIO' else NotLinkedExecutor()
     eng = Engine(supabase, now, executor=executor, dry_run=args.dry_run)
     if isinstance(executor, PortfolioExecutor):
-        executor.fx_usd_per_eur = eng.usd_per_eur
+        executor.fx_usd_per_eur = eng.usd_per_eur       # funzione della data del cambio
     run_id = eng.store.run_start(EXECUTOR_MODE, args.dry_run, now)
     print(f"Modulo T - state machine (paper: operazioni virtuali sul portafoglio IA, nessun ordine reale) | now={now:%Y-%m-%d %H:%M} UTC")
     try:
         counters = eng.run()
-        eng.store.run_finish(run_id, 'OK', counters, notes={'note': eng.notes[:20], 'alerts': eng.alert_stats, 'dati': eng.data_stats})
+        eng.store.run_finish(run_id, 'OK', counters, notes={'note': eng.notes[:20], 'alerts': eng.alert_stats, 'dati': eng.data_stats,
+                                                            'errori_cambio': eng.fx_errors[:20]})
         print(f"✅ T completato: {counters} | alert: {eng.alert_stats}")
         if EXECUTOR_MODE == 'PORTFOLIO' and not args.dry_run:
             snapshot_if_due(supabase, now)
+        if eng.fx_errors:
+            print(f"❌ T: {len(eng.fx_errors)} operazioni ferme per cambio BCE non disponibile: {eng.fx_errors[:5]}")
+            sys.exit(1)
     except Exception as e:
         eng.store.run_finish(run_id, 'ERROR', eng.c, error=str(e)[:900], notes={'note': eng.notes[:20]})
         print(f"❌ T errore: {e}")
