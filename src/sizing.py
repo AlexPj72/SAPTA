@@ -9,7 +9,8 @@ Regole:
   rischio reale non puo' superare quello stimato, qualunque sia il punto della zona in cui scatta l'ingresso;
 - il rischio massimo per operazione (1% del capitale di riferimento) comprende la perdita allo stop (con slippage in uscita) E i
   costi completi di andata e ritorno (commissione fissa, commissione %, spread, bollo, slippage);
-- quantita' intera (floor); mai oltre il capitale di riferimento;
+- quantita': INTERA (floor) per i titoli italiani; FRAZIONARIA (4 decimali, per difetto) SOLO per i titoli USA (decisione dell'utente del 22/11);
+  mai oltre il capitale di riferimento; il rischio resta all'1% in entrambi i casi;
 - capitale di riferimento: 1.000 EUR (capital_state). Non si aumenta qui.
 """
 import math
@@ -24,6 +25,19 @@ SLIPPAGE_BY_LIQUIDITY = {             # [Sezione 12] valori di default, non cali
     'LIQ_LOW': 0.0040,
 }
 DEFAULT_SLIPPAGE = 0.0040             # fail-safe: bucket mancante = caso peggiore
+FRACTIONAL_DECIMALS = 4               # quantita' frazionarie (solo USA): troncate per difetto a 4 decimali, il rischio non supera mai l'1%
+FRACTIONAL_MARKETS = ('USA',)         # decisione dell'utente (22/11): frazioni consentite ESCLUSIVAMENTE per i titoli USA
+
+
+def allows_fractional(market):
+    return market in FRACTIONAL_MARKETS
+
+
+def _floor_qty(x, fractional):
+    if fractional:
+        f = 10 ** FRACTIONAL_DECIMALS
+        return math.floor(x * f + 1e-9) / f
+    return math.floor(x)
 
 
 def slippage_for(liquidity_bucket):
@@ -51,7 +65,7 @@ def round_trip_cost(price, quantity, costs, liquidity_bucket):
 
 
 def size_position(ref_price, atr, invalidation_price, capital_eur, fx_eur_per_local, costs, liquidity_bucket,
-                  risk_percent=RISK_PER_TRADE_PERCENT):
+                  risk_percent=RISK_PER_TRADE_PERCENT, fractional=False):
     """Quantita' (intera) e controvalore. None se non dimensionabile (dati mancanti o stop non sotto il prezzo di ingresso).
     ref_price, atr, invalidation_price sono nella valuta del titolo; capital_eur in EUR; fx_eur_per_local = EUR per 1 unita' locale."""
     if None in (ref_price, atr, invalidation_price, capital_eur, fx_eur_per_local, costs) or not fx_eur_per_local:
@@ -65,10 +79,10 @@ def size_position(ref_price, atr, invalidation_price, capital_eur, fx_eur_per_lo
     loss_per_share = (entry - exit_at_stop) + pct_costs * entry                       # perdita allo stop + costi proporzionali (andata e ritorno)
     fixed_local = 2 * costs['commissione_fissa'] / fx_eur_per_local                  # commissione fissa, andata e ritorno
     risk_local = capital_eur * risk_percent / fx_eur_per_local
-    qty = math.floor((risk_local - fixed_local) / loss_per_share) if risk_local > fixed_local else 0
-    qty = min(qty, math.floor(capital_eur / (entry * fx_eur_per_local)))             # mai oltre il capitale
+    qty = _floor_qty((risk_local - fixed_local) / loss_per_share, fractional) if risk_local > fixed_local else 0
+    qty = min(qty, _floor_qty(capital_eur / (entry * fx_eur_per_local), fractional))   # mai oltre il capitale
     qty = max(qty, 0)
     cost_rt, _ = round_trip_cost(entry, qty, costs, liquidity_bucket) if qty else (0.0, slip)
-    return {'quantity': qty, 'entry_price': entry, 'countervalue_eur': round(qty * entry * fx_eur_per_local, 2),
+    return {'quantity': qty, 'fractional': fractional, 'entry_price': entry, 'countervalue_eur': round(qty * entry * fx_eur_per_local, 2),
             'risk_budget_eur': round(capital_eur * risk_percent, 2), 'round_trip_cost_local': cost_rt,
             'loss_per_share_local': loss_per_share}

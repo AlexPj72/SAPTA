@@ -100,11 +100,11 @@ def test_T_ingresso_usa_il_tasso_della_data_del_segnale_e_la_stessa_quantita_di_
     db = DB(RATES)
     monkeypatch.setattr(E, 'supabase', db)
     fx_e = E.fx_to_eur_for_signal({'timestamp': SIG_TS}, {})                       # E: tasso del 17 (per il segnale del 18)
-    expected = sizing.size_position(100.0, 2.0, 97.0, 1000.0, fx_e, COSTS_USA, 'LIQ_HIGH')
+    expected = sizing.size_position(100.0, 2.0, 97.0, 1000.0, fx_e, COSTS_USA, 'LIQ_HIGH', fractional=sizing.allows_fractional('USA'))
     eng = _engine(lambda d: rate_for_date(db, d).rate, now=datetime(2026, 11, 19, 10, 0, tzinfo=U))   # T un altro giorno (19), segnale del 18
     eng._trigger(_lc(), _bar())
     assert eng.captured['fx_eur_per_local'] == pytest.approx(fx_e)                  # stesso tasso di E, anche se il tasso del 18 e' ormai pubblicato
-    assert eng.captured['quantity'] == expected['quantity'] >= 1
+    assert eng.captured['quantity'] == expected['quantity'] > 0
     assert eng.fx_errors == []
 
 
