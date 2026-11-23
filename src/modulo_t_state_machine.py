@@ -31,7 +31,8 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notifications
 from fx import FxRateUnavailable, rate_for_date, reference_date
-from sizing import REFERENCE_CAPITAL_EUR, RISK_PER_TRADE_PERCENT, ZONE_ATR_FRACTION, size_position   # noqa: F401  (dimensionamento condiviso con E)
+from sizing import (REFERENCE_CAPITAL_EUR, RISK_PER_TRADE_PERCENT, ZONE_ATR_FRACTION, allows_fractional,   # noqa: F401
+                    size_position)   # dimensionamento condiviso con E
 from market_calendar import (BAR_MINUTES, CalendarNotVerified, currency_of, is_regular_bar, last_regular_bar_start,
 
                              local_date, market_of, next_session_close, nth_session_date, session_bounds)
@@ -679,10 +680,10 @@ class Engine:
         if not costs:
             return self._note(lc, bar, f'ingresso rimandato: costi di operazione del mercato {market} non disponibili', retry=True)
         sz = size_position(float(lc['ref_price']), float(lc['atr']), float(lc['invalidation_price']), capital_ref,
-                           fx_eur_per_local, costs, lc.get('liquidity_bucket'))
+                           fx_eur_per_local, costs, lc.get('liquidity_bucket'), fractional=allows_fractional(market))   # frazioni solo USA
         qty = sz['quantity'] if sz else 0
-        if qty < 1:
-            return self._note(lc, bar, 'SEGNALE VALIDO ma NON eseguito: quantita < 1 azione con il rischio per operazione (costi inclusi)', retry=True)
+        if not qty > 0:
+            return self._note(lc, bar, 'SEGNALE VALIDO ma NON eseguito: quantita nulla con il rischio per operazione (costi inclusi)', retry=True)
         countervalue = round(qty * fill * fx_eur_per_local, 2)
         available = cash - reserved
         if countervalue > available + 1e-9:

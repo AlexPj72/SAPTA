@@ -16,6 +16,11 @@ class _Query:
     def limit(self, *a, **k): return self
     def gte(self, *a, **k): return self
     def in_(self, *a, **k): return self
+    def lt(self, *a, **k): return self
+    def lte(self, *a, **k): return self
+    def like(self, *a, **k): return self
+    def range(self, *a, **k): return self
+    def neq(self, *a, **k): return self
 
     def upsert(self, rows, **kw):
         self.mode, self.payload, self.kw = 'upsert', rows, kw

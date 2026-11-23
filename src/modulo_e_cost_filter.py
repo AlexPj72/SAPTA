@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 from config import supabase
 from fx import FxRateUnavailable, rate_for_date, reference_date
 from sizing import (DEFAULT_SLIPPAGE, REFERENCE_CAPITAL_EUR, RISK_PER_TRADE_PERCENT, SLIPPAGE_BY_LIQUIDITY,  # noqa: F401
-                    calculate_operation_cost, entry_reference_price, round_trip_cost, size_position)
+                    allows_fractional, calculate_operation_cost, entry_reference_price, round_trip_cost, size_position)
 
 
 def _fromiso(s):
@@ -410,14 +410,15 @@ def filter_signals(tickers_filter=None):
                 print(f"⚠️ {ticker}: manca invalidation_price, impossibile dimensionare - salto")
                 continue
             # [Passo 3 - P1-7] stessa funzione di Modulo T: prezzo R + 0,5 ATR, costi andata/ritorno inclusi nel rischio, quantita' intera
-            sizing = size_position(price, atr, invalidation_price, current_capital, fx_to_eur, costs, liquidity_bucket)
+            sizing = size_position(price, atr, invalidation_price, current_capital, fx_to_eur, costs, liquidity_bucket,
+                                   fractional=allows_fractional(market_for_ticker(ticker)))   # frazioni solo USA
             quantity = sizing['quantity'] if sizing else 0
             if sizing is None and signal['action'] != 'HOLD':
                 print(f"⚠️ {ticker}: stop non sotto il prezzo di ingresso, impossibile dimensionare - salto")
                 continue
             countervalue_eur = sizing['countervalue_eur'] if sizing else 0.0
             position_size = countervalue_eur if quantity else None  # EUR (vedi check_portfolio_exposure)
-            returns = calculate_expected_return(price, confidence_multiplier, atr, costs, max(quantity, 1), liquidity_bucket, target_price)
+            returns = calculate_expected_return(price, confidence_multiplier, atr, costs, quantity if quantity > 0 else 1, liquidity_bucket, target_price)
 
             threshold_net = 0.005
             filter_passed = returns['expected_net_return'] > threshold_net and signal['action'] != 'HOLD'
@@ -429,9 +430,9 @@ def filter_signals(tickers_filter=None):
 
             sector_count = 0
             exposure_pct = 0.0
-            if filter_passed and filtered_action == 'BUY' and quantity < 1:
+            if filter_passed and filtered_action == 'BUY' and not quantity > 0:
                 filter_passed, filtered_action = False, 'HOLD'
-                filter_reason = "Quantita' < 1 azione con il rischio per operazione (costi inclusi)"
+                filter_reason = "Quantita' nulla con il rischio per operazione (costi inclusi): titolo con azioni intere troppo caro per l'1%"
             if filter_passed and filtered_action == 'BUY':
                 sector_ok, sector_count, block_reason = check_sector_concentration(
                     ticker, sector, SECTOR_EXPOSURE_LOOKBACK_DAYS, MAX_POSITIONS_PER_SECTOR
