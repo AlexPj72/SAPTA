@@ -209,3 +209,33 @@ def test_E_si_ferma_con_exit_code_1_se_manca_il_cambio_USD(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert code == 1 and 'cambio BCE non disponibile' in out and 'E SI FERMA' in out        # fermato per il cambio, non per altro
     assert db.inserts.get('signals_filtered') is None and db.prezzi == {}               # nessuna scrittura
+
+
+# ---------------------------------------------------------------- provider di DEFAULT (23/11: 'Engine' object has no attribute 'sb')
+def _default_engine(rates_rows):
+    db = FakeSupabase()
+    db.tables = {'fx_rates': rates_rows}
+    eng = T.Engine(db, datetime(2026, 11, 23, 15, 30, tzinfo=U), dry_run=True, log=lambda *a, **k: None)      # NESSUN fx_provider esplicito
+    return eng
+
+
+def test_T_provider_di_default_legge_fx_rates_dal_client_dello_store():
+    eng = _default_engine([{'rate_date': '2026-11-20', 'rate': 1.099, 'source': 'ECB'}])
+    assert eng.usd_per_eur(date(2026, 11, 23)) == pytest.approx(1.099)
+
+
+def test_T_provider_di_default_senza_tassi_solleva_errore_esplicito_non_attributeerror():
+    eng = _default_engine([])
+    with pytest.raises(FxRateUnavailable):
+        eng.usd_per_eur(date(2026, 11, 23))
+
+
+def test_T_ingresso_usa_con_provider_di_default_il_tasso_BCE():
+    eng = _default_engine([{'rate_date': '2026-11-20', 'rate': 1.099, 'source': 'ECB'}])
+    stub = _TStore()
+    stub.sb = eng.store.sb                      # lo Store reale ha il client; lo stub lo espone come fa lo Store
+    eng.store, eng.captured = stub, {}
+    eng._apply = lambda lc, key, etype, to_state, updates, **k: (eng.captured.update(updates) or dict(lc, state=to_state, **updates))
+    eng._note = lambda lc, bar, text, retry=False: lc
+    eng._trigger(_lc(created_at='2026-11-23T14:40:00+00:00'), _bar())
+    assert eng.captured['fx_eur_per_local'] == pytest.approx(1 / 1.099) and eng.captured['quantity'] > 0
