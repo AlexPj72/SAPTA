@@ -434,7 +434,7 @@ class Engine:
         self.alert_stats = {'enqueued': 0, 'sent': 0, 'failed': 0, 'expired': 0, 'given_up': 0, 'not_configured': 0}
         self.executor = executor or NotLinkedExecutor()
         # [fx_rates] cambio BCE unico per giornata (stessa riga di E); nessuna altra fonte. fx_provider(data) -> USD per 1 EUR o FxRateUnavailable
-        self.fx_provider = fx_provider or (lambda ref_date: rate_for_date(self.sb, ref_date).rate)
+        self.fx_provider = fx_provider or (lambda ref_date: rate_for_date(self.store.sb, ref_date).rate)   # client del solo Store (Engine non ha 'sb')
         self.fx_errors = []
         self.c = {'n_signals_new': 0, 'n_created': 0, 'n_skipped': 0, 'n_evaluated': 0, 'n_transitions': 0, 'n_pending_retry': 0}
         self.notes = []
