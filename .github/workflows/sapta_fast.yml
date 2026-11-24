@@ -72,7 +72,8 @@ jobs:
 
       - name: Run Modulo T - State machine operativa (PAPER, alert COMPRA ORA e VENDI ORA, nessuna operazione di portafoglio)
         if: ${{ !cancelled() }}   # parte anche se AI Watch esce con errore (es. SMTP)
-        continue-on-error: true   # un problema di T non deve mai bloccare ingestione, H1 o AI Watch
+        # [24/11] niente continue-on-error: un errore di T rende ROSSO il job (prima restava 'success' e nascondeva run in ERROR).
+        # Gli step successivi hanno if: !cancelled(), quindi nulla viene bloccato.
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
