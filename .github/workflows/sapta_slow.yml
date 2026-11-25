@@ -30,6 +30,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install --retries 5 --timeout 60 -r requirements-slow.txt
 
+      - name: Attendi l'ingestione delle barre 15m (fast parte nello stesso minuto; barre .MI in DB ~17 min dopo la fine)
+        run: sleep 180  # B richiede una barra con fine <= 30 min: senza attesa l'ultima barra .MI ha ~31-32 min e B non genera segnali
+
       - name: Run Modulo H - Anomaly + Context (H2)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
