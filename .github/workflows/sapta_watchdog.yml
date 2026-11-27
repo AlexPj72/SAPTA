@@ -1,0 +1,63 @@
+name: SAPTA Watchdog (inattività Fast)
+
+on:
+  schedule:
+    - cron: '*/10 8-21 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: sapta-watchdog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Controllo ultimo run di T
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 - <<'PY'
+          import os, json, sys, urllib.request, urllib.parse
+          import datetime as dt
+
+          now = dt.datetime.now(dt.timezone.utc)
+          m = now.hour * 60 + now.minute
+          if not 505 <= m <= 1310:
+              print("Fuori finestra (08:25-21:50 UTC), nessun controllo")
+              sys.exit(0)
+
+          def alert(testo):
+              try:
+                  data = urllib.parse.urlencode({
+                      "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+                      "text": testo}).encode()
+                  urllib.request.urlopen(
+                      "https://api.telegram.org/bot%s/sendMessage"
+                      % os.environ["TELEGRAM_BOT_TOKEN"], data, timeout=20)
+              except Exception as e:
+                  print("Invio Telegram fallito:", e)
+
+          try:
+              key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+              req = urllib.request.Request(
+                  os.environ["SUPABASE_URL"] + "/rest/v1/trade_runs"
+                  "?select=started_at&order=started_at.desc&limit=1",
+                  headers={"apikey": key, "Authorization": "Bearer " + key})
+              d = json.load(urllib.request.urlopen(req, timeout=20))
+              last = dt.datetime.fromisoformat(d[0]["started_at"].replace("Z", "+00:00"))
+              age = (now - last).total_seconds() / 60
+          except Exception as e:
+              alert("SAPTA WATCHDOG: impossibile leggere trade_runs (%s)" % e)
+              print("Errore lettura:", e)
+              sys.exit(1)
+
+          print("Ultimo run T: %s (%.1f min fa)" % (last.isoformat(), age))
+          if age > 20:
+              alert("SAPTA WATCHDOG: nessun run di T da %.0f minuti (ultimo %s UTC). Fast potrebbe non partire." % (age, last.strftime("%H:%M")))
+              sys.exit(1)
+          PY
